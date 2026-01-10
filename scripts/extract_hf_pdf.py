@@ -128,9 +128,6 @@ def bullets_by_sentence(text: str) -> str:
     """
     t = norm(text)
 
-    # separa recordatorios tipo "RECUERDA ..." como frase aparte
-    t = re.sub(r"\bRECUERDA[:\s]*", "RECUERDA: ", t, flags=re.IGNORECASE)
-
     # corte por puntuación final + espacio
     parts = re.split(r"(?<=[\.\!\?])\s+", t)
     parts = [p.strip() for p in parts if p.strip()]
@@ -141,11 +138,22 @@ def bullets_by_sentence(text: str) -> str:
 
     out = []
     for p in parts:
-        up = p.strip().upper()
-        if up.startswith("CONSEJO") or up.startswith("TIP") or up.startswith("NOTA"):
-            out.append(p.strip())          # sin "•"
+        p = p.strip()
+        if not p:
+            continue
+
+        # Por si ya viene con bullet pegado
+        if p.startswith("•"):
+            p = p.lstrip("•").strip()
+
+        up = p.upper()
+
+        #  Estas van en cursiva y SIN bullet
+        if up.startswith("CONSEJO:") or up.startswith("RECUERDA:") or up.startswith("TIP:") or up.startswith("NOTA:"):
+            out.append(f"_{p}_")   # marcador de cursiva
         else:
-            out.append(f"• {p.strip()}")
+            out.append(f"• {p}")
+
     return "\n".join(out)
 
 def is_numbers_only_line(s: str) -> bool:

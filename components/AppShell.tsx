@@ -96,16 +96,22 @@ export function AppShell() {
     setShop(null);
   }
 
-  function renderBoldMultiline(text: string) {
+  function renderRichMultiline(text: string) {
     return text.split("\n").map((line, i) => {
-      const parts = line.split(/\*\*(.+?)\*\*/g); // alterna normal/bold
-      return (
-        <div key={i}>
-          {parts.map((p, j) =>
-            j % 2 === 1 ? <strong key={j}>{p}</strong> : <span key={j}>{p}</span>
-          )}
-        </div>
+      const trimmed = line.trim();
+
+      // ✅ cursiva si viene envuelto en _..._
+      const isItalic = trimmed.startsWith("_") && trimmed.endsWith("_") && trimmed.length >= 2;
+      const content = isItalic ? trimmed.slice(1, -1) : line;
+
+      // ✅ negrita con **...**
+      const parts = content.split(/\*\*(.+?)\*\*/g);
+
+      const rendered = parts.map((p, j) =>
+        j % 2 === 1 ? <strong key={j}>{p}</strong> : <span key={j}>{p}</span>
       );
+
+      return isItalic ? <em key={i}>{rendered}</em> : <div key={i}>{rendered}</div>;
     });
   }
 
@@ -236,7 +242,7 @@ export function AppShell() {
                   return (
                     <div key={idx} style={styles.stepCard}>
                       <div style={styles.stepTitle}>{title || `Paso ${idx + 1}`}</div>
-                      <div style={styles.stepText}>{renderBoldMultiline(body)}</div>
+                      <div style={styles.stepText}>{renderRichMultiline(body)}</div>
                     </div>
                   );
                 })}
@@ -317,12 +323,12 @@ export function AppShell() {
                         </span>
                       </label>
                       <span style={styles.muted}>
-  {item.qtyText
-    ? item.qtyText
-    : item.qty != null
-      ? `${Math.round(item.qty * 100) / 100} ${item.unit ?? ""}`.trim()
-      : ""}
-</span>
+                        {item.qtyText
+                          ? item.qtyText
+                          : item.qty != null
+                            ? `${Math.round(item.qty * 100) / 100} ${item.unit ?? ""}`.trim()
+                            : ""}
+                      </span>
                     </li>
                   ))}
                 </ul>
