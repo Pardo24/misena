@@ -59,8 +59,14 @@ export type PantryItem = {
 export type ShoppingItem = {
   key: string;
   name: string;
-  qty: number;
-  unit: string;
   category: string;
   checked: boolean;
+
+  // legacy numérico
+  qty?: number;
+  unit?: string;
+
+  // HelloFresh (texto)
+  qtyText?: string;
 };
+

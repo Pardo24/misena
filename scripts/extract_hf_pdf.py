@@ -9,6 +9,27 @@ import fitz  # PyMuPDF
 def norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
+def page_text_with_bold(page: fitz.Page) -> str:
+    d = page.get_text("dict")
+    out_lines = []
+
+    for block in d.get("blocks", []):
+        for line in block.get("lines", []):
+            parts = []
+            for span in line.get("spans", []):
+                txt = span.get("text", "")
+                if not txt.strip():
+                    continue
+                font = (span.get("font") or "").lower()
+                is_bold = "bold" in font or "black" in font or "semibold" in font
+                if is_bold:
+                    parts.append(f"**{txt}**")
+                else:
+                    parts.append(txt)
+            if parts:
+                out_lines.append(" ".join(parts))
+    return "\n".join(out_lines)
+
 
 def get_text_blocks(page: fitz.Page):
     """Devuelve bloques de texto con bbox y texto plano."""
@@ -118,7 +139,14 @@ def bullets_by_sentence(text: str) -> str:
     if len(parts) <= 1:
         return f"• {t}"
 
-    return "\n".join([f"• {p}" for p in parts])
+    out = []
+    for p in parts:
+        up = p.strip().upper()
+        if up.startswith("CONSEJO") or up.startswith("TIP") or up.startswith("NOTA"):
+            out.append(p.strip())          # sin "•"
+        else:
+            out.append(f"• {p.strip()}")
+    return "\n".join(out)
 
 def is_numbers_only_line(s: str) -> bool:
     return re.fullmatch(r"\d+(?:\s+\d+)*", s.strip()) is not None
@@ -177,7 +205,7 @@ def bullets_by_sentence(text: str) -> str:
 
 
 def extract_steps_as_blocks(doc: fitz.Document) -> list[str]:
-    full = "\n".join(doc[i].get_text("text") for i in range(len(doc)))
+    full = "\n".join(page_text_with_bold(doc[i]) for i in range(len(doc)))
 
     # recorta desde el primer paso hasta el final
     # si existe "¡Que aproveche!" lo usamos como final
@@ -266,151 +294,195 @@ def parse_amount_unit(qty_text: str):
     return qty, unit_map.get(unit, unit)
 
 
+import re
+import fitz  # pymupdf
+
+
 def extract_ingredients(doc: fitz.Document) -> list[dict]:
-    full = "\n".join(doc[i].get_text("text") for i in range(len(doc)))
+    if len(doc) == 0:
+        return []
 
-    lines = [norm(l) for l in full.splitlines()]
-    lines = [l for l in lines if l]
-
-   # 1) Recorta sección Ingredientes por líneas (robusto)
-    in_ing = False
-    raw = []
-
-    for l in lines:
-        low = l.lower()
-
-        if low == "ingredientes":
-            in_ing = True
-            continue
-
-        if not in_ing:
-            continue
-
-        # salta header "2P 4P"
-        if low in ("2p 4p", "2p", "4p"):
-            continue
-
-        # fin de tabla
-        if low.startswith("información nutricional") or low.startswith("alérgenos") or low.startswith("utensilios"):
-            break
-        if low.startswith("*conservar"):
+    # 0) Encuentra la página donde está la tabla (Ingredientes + 2P/4P)
+    ing_page_idx = None
+    for i in range(len(doc)):
+        t = (doc[i].get_text("text") or "").lower()
+        if "ingredientes" in t and "2p" in t and "4p" in t:
+            ing_page_idx = i
             break
 
-        raw.append(l)
+    if ing_page_idx is None:
+        # fallback: si no encuentra, intenta la 2ª página
+        ing_page_idx = 1 if len(doc) > 1 else 0
+
+    page = doc[ing_page_idx]
+    W = float(page.rect.width)
+
+    # Panel izquierdo: en tus PDFs suele ser ~30% de ancho
+    LEFT_MAX_X = W * 0.36   # si te falla, prueba 0.34 / 0.40
+
+    d = page.get_text("dict")
+
+    # Borde derecho real de la tabla: usa el header "4P" si existe
+    tableRightX = W * 0.36  # fallback razonable
+
+    for block in d.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                txt = (span.get("text") or "").strip().lower()
+                if txt == "4p":
+                    # right edge del span "4P" + margen para incluir la columna 4P
+                    tableRightX = span["bbox"][2] + 30
+                    break
+
+    # 1) Extrae líneas del panel izquierdo con bbox y texto
+    left_lines = []
+    for block in d.get("blocks", []):
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            if not spans:
+                continue
+
+            x0 = min(s["bbox"][0] for s in spans)
+            y0 = min(s["bbox"][1] for s in spans)
+            x1 = max(s["bbox"][2] for s in spans)
+            y1 = max(s["bbox"][3] for s in spans)
+
+            if x1 > tableRightX:
+                continue
+
+            text = "".join(s.get("text", "") for s in spans).strip()
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                continue
+
+            left_lines.append({"text": text, "bbox": (x0, y0, x1, y1), "xc": (x0 + x1) / 2.0})
+
+
+    if not left_lines:
+        return []
+
+    left_lines.sort(key=lambda r: (r["bbox"][1], r["bbox"][0]))
+
+    # 2) Encuentra rango vertical de la tabla: desde "Ingredientes" hasta "Información nutricional"/"Alérgenos"
+    start_y = None
+    end_y = None
+
+    for r in left_lines:
+        if r["text"].strip().lower() == "ingredientes":
+            start_y = r["bbox"][3]
+            break
+
+    if start_y is None:
+        return []
+
+    for r in left_lines:
+        low = r["text"].strip().lower()
+        if r["bbox"][1] <= start_y:
+            continue
+        if low.startswith("información nutricional") or low.startswith("alérgenos") or low.startswith("*conservar"):
+            end_y = r["bbox"][1]
+            break
+
+    if end_y is None:
+        end_y = start_y + 9999
+
+    table_lines = [
+        r for r in left_lines
+        if r["bbox"][1] > start_y and r["bbox"][1] < end_y
+    ]
+
+    # quita header
+    table_lines = [r for r in table_lines if r["text"].strip().lower() not in ("2p 4p", "2p", "4p")]
+
+    if not table_lines:
+        return []
+
+    # 3) Agrupa en filas por Y
+    def cluster_rows_by_y(items, tol=3.0):
+        rows = []
+        for it in items:
+            y = it["bbox"][1]
+            placed = False
+            for row in rows:
+                if abs(row["y"] - y) <= tol:
+                    row["items"].append(it)
+                    row["y"] = (row["y"] + y) / 2.0
+                    placed = True
+                    break
+            if not placed:
+                rows.append({"y": y, "items": [it]})
+        rows.sort(key=lambda r: r["y"])
+        for row in rows:
+            row["items"].sort(key=lambda r: r["bbox"][0])
+        return rows
+
+    rows = cluster_rows_by_y(table_lines, tol=3.0)
+
+    # 4) Cortes de columnas: usa posiciones REALES de "2P" y "4P" (header)
+    x_2p = None
+    x_4p = None
+
+    for r in left_lines:
+        t = r["text"].strip().lower()
+        if t == "2p":
+            x_2p = r["xc"]
+        elif t == "4p":
+            x_4p = r["xc"]
+
+    if x_2p is None or x_4p is None:
+        # fallback por si el header no se extrajo como "2P" y "4P"
+        # (ajusta si hace falta)
+        cut1 = W * 0.20
+        cut2 = W * 0.28
+    else:
+        # Nombre | 2P | 4P
+        cut1 = x_2p - 15              # 15px a la izquierda del centro de 2P
+        cut2 = (x_2p + x_4p) / 2.0    # frontera entre 2P y 4P
+
 
     ingredients = []
 
-    # 2) Regex para capturar pares cantidad+unidad
-    qty_re = re.compile(
-        r"(?P<num>½|\d+(?:[.,]\d+)?)\s*(?P<unit>gramos?|ml|m|unidades?|unidad|sobres?|sobre|cucharaditas?|cucharadita)\b",
-        re.IGNORECASE
-    )
-
-    # ✅ COSE líneas: acumulamos hasta detectar 2 cantidades (2P y 4P)
-    rows = []
-    buf = ""
-
-    for l in raw:
-        # empezamos buffer si la línea parece relevante
-        if not buf:
-            # empezamos solo si hay número/½ o la palabra unidad/sobre/cucharadita/ml/gramos
-            if not (re.search(r"\d|½", l) or re.search(r"\b(unidad|unidades|sobre|sobres|cucharadita|cucharaditas|ml|gramo|gramos)\b", l.lower())):
-                continue
-            buf = l.strip()
-        else:
-            buf = (buf + " " + l).strip()
-
-        test = buf.replace("*", "").replace("10)", "").strip()
-        test = test.replace("1/2", "½")
-        test = re.sub(r"\b1\s*/\s*2\b", "½", test)
-        matches = list(qty_re.finditer(test))
-
-        if len(matches) >= 2:
-            rows.append(test)
-            buf = ""
-
-    def norm_unit(u: str) -> str:
-        u = u.lower()
-        if u == "m":  # cuando el PDF corta "ml"
-            return "ml"
-        mapping = {
-            "gramo": "g", "gramos": "g",
-            "ml": "ml",
-            "unidad": "u", "unidades": "u",
-            "sobre": "u", "sobres": "u",
-            "cucharadita": "cdta", "cucharaditas": "cdta",
-        }
-        return mapping.get(u, u)
-
-    def parse_num(n: str):
-        n = n.replace(",", ".").strip()
-        if n == "½":
-            return 0.5
-        try:
-            return float(n)
-        except:
-            return None
-
+    # 5) Construye ingredientes por fila
     for row in rows:
-        # limpia asteriscos y el "10)" del apio
-        row_clean = row.replace("*", "").replace("10)", "").strip()
-        row_clean = row_clean.replace("1/2", "½")
-        row_clean = re.sub(r"\b1\s*/\s*2\b", "½", row_clean)
-        matches = list(qty_re.finditer(row_clean))
+        name_parts, q2_parts, q4_parts = [], [], []
 
-        # Caso raro: si solo pilla 1 match (p.ej. "Chili verde unidad 1 unidad" en tu copia),
-        # intentamos inferir un "½ unidad" para 2P si aparece la palabra 'unidad' antes del match.
-        if len(matches) == 1:
-            m = matches[0]
-            prefix_text = row_clean[:m.start()]
-            prefix_low = prefix_text.lower()
-            if " unidad" in prefix_low:
-                name = norm(prefix_text.replace("unidad", "").strip())
-                # inventamos un match de ½ unidad antes
-                fake_qty2 = ("½", "unidad")
-                qty4 = (m.group("num"), m.group("unit"))
-                # nombre es lo que queda antes de la palabra "unidad" suelta
-                if name:
-                    q2n = parse_num(fake_qty2[0])
-                    q4n = parse_num(qty4[0])
-                    ingredients.append({
-                        "name": {"es": name, "ca": name},
-                        "qty2Text": f"{fake_qty2[0]} {fake_qty2[1]}",
-                        "qty4Text": f"{qty4[0]} {qty4[1]}",
-                        "qty2": q2n, "unit2": norm_unit(fake_qty2[1]),
-                        "qty4": q4n, "unit4": norm_unit(qty4[1]),
-                        "category": "unknown",
-                    })
+        for it in row["items"]:
+            x = it["xc"]
+            txt = it["text"].strip()
+
+            low = txt.lower()
+            if low.startswith("antes de empezar") or low.startswith("utensilios"):
                 continue
 
-        if len(matches) < 2:
-            continue  # no es una fila válida
+            if x < cut1:
+                name_parts.append(txt)
+            elif x < cut2:
+                q2_parts.append(txt)
+            else:
+                q4_parts.append(txt)
 
-        # Normalmente son exactamente 2: (2P) y (4P)
-        m2, m4 = matches[0], matches[1]
+        name = " ".join(name_parts).strip()
+        qty2 = " ".join(q2_parts).strip()
+        qty4 = " ".join(q4_parts).strip()
 
-        qty2_text = row_clean[m2.start():m2.end()].strip()
-        qty4_text = row_clean[m4.start():m4.end()].strip()
+        name = name.replace("*", " ")
+        name = re.sub(r"\s*\d+\)\s*", " ", name)  # quita 7) 13) etc
+        name = re.sub(r"\s{2,}", " ", name).strip()
 
-        name_prefix = row_clean[:m2.start()].strip()
-        name_mid = row_clean[m2.end():m4.start()].strip()
-        name_suffix = row_clean[m4.end():].strip()
-
-        # El nombre puede estar antes, entre, o después de las cantidades
-        name = " ".join([name_prefix, name_mid, name_suffix]).strip()
+        if not name:
+            continue
+        if not qty2 and not qty4:
+            continue
 
         ingredients.append({
             "name": {"es": name, "ca": name},
-            "qty2Text": qty2_text,
-            "qty4Text": qty4_text,
-            "qty2": parse_num(m2.group("num")),
-            "unit2": norm_unit(m2.group("unit")),
-            "qty4": parse_num(m4.group("num")),
-            "unit4": norm_unit(m4.group("unit")),
+            "qty2Text": qty2,
+            "qty4Text": qty4,
             "category": "unknown",
         })
 
     return ingredients
+
 
 def derive_tags(time_min: int, ingredients: list[dict]) -> list[str]:
     tags = ["dinner"]

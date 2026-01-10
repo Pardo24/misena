@@ -70,20 +70,45 @@ export async function buildShoppingList(recipe: Recipe): Promise<ShoppingItem[]>
   const map = new Map<string, ShoppingItem>();
 
   for (const ing of recipe.ingredients) {
-    const name = ing.name[lang] || ing.name.es;
-    const nameKey = normalize(ing.name.es);
+    const name = ing.name?.[lang] || ing.name?.es || "";
+    const nameKey = normalize(ing.name?.es || name);
 
     const isPantry = !!ing.pantry || pantrySet.has(nameKey);
     if (isPantry) continue;
 
-    const qty = ing.qty * multiplier;
-    const key = `${normalize(name)}|${ing.unit}`;
+    // --- HelloFresh: preferimos qty2Text/qty4Text (texto) ---
+    const hfQtyText = settings.doublePortions ? ing.qty4Text : ing.qty2Text;
+    if (hfQtyText) {
+      const key = `${normalize(name)}|${hfQtyText}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          name,
+          qtyText: hfQtyText,
+          category: ing.category ?? "unknown",
+          checked: false,
+        });
+      }
+      continue;
+    }
+
+    // --- Legacy: qty numérico ---
+    const qty = (ing.qty ?? 0) * multiplier;
+    const unit = ing.unit ?? "";
+    const key = `${normalize(name)}|${unit}`;
 
     const prev = map.get(key);
-    if (!prev) {
-      map.set(key, { key, name, qty, unit: ing.unit, category: ing.category, checked: false });
+    if (prev) {
+      prev.qty = (prev.qty ?? 0) + qty;
     } else {
-      prev.qty += qty;
+      map.set(key, {
+        key,
+        name,
+        qty,
+        unit,
+        category: ing.category ?? "unknown",
+        checked: false,
+      });
     }
   }
 

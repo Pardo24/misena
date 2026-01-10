@@ -96,6 +96,19 @@ export function AppShell() {
     setShop(null);
   }
 
+  function renderBoldMultiline(text: string) {
+    return text.split("\n").map((line, i) => {
+      const parts = line.split(/\*\*(.+?)\*\*/g); // alterna normal/bold
+      return (
+        <div key={i}>
+          {parts.map((p, j) =>
+            j % 2 === 1 ? <strong key={j}>{p}</strong> : <span key={j}>{p}</span>
+          )}
+        </div>
+      );
+    });
+  }
+
   async function generateShop() {
     if (!today) return;
     const list = await buildShoppingList(today);
@@ -215,21 +228,19 @@ export function AppShell() {
                <h3 style={styles.h3}>Pasos</h3>
 
                 <div style={styles.stepsGrid}>
-                {today.steps[lang].map((s, idx) => (
+                {today.steps[lang].map((s, idx) => {
+                  const [titleLine, ...rest] = s.split("\n");
+                  const title = (titleLine || "").trim();
+                  const body = rest.join("\n").trim();
+
+                  return (
                     <div key={idx} style={styles.stepCard}>
-                    {(() => {
-                    const [title, ...rest] = s.split("\n");
-                    const body = rest.join("\n").trim();
-                    return (
-                      <>
-                        <div style={styles.stepTitle}>{title || `Paso ${idx + 1}`}</div>
-                        <div style={styles.stepText}>{body}</div>
-                      </>
-                    );
-                  })()}
+                      <div style={styles.stepTitle}>{title || `Paso ${idx + 1}`}</div>
+                      <div style={styles.stepText}>{renderBoldMultiline(body)}</div>
                     </div>
-                ))}
-                </div>
+                  );
+                })}
+              </div>
 
 
                 <div style={styles.btnRow}>
@@ -305,7 +316,13 @@ export function AppShell() {
                           {item.name}
                         </span>
                       </label>
-                      <span style={styles.muted}>{Math.round(item.qty * 100) / 100} {item.unit}</span>
+                      <span style={styles.muted}>
+  {item.qtyText
+    ? item.qtyText
+    : item.qty != null
+      ? `${Math.round(item.qty * 100) / 100} ${item.unit ?? ""}`.trim()
+      : ""}
+</span>
                     </li>
                   ))}
                 </ul>
