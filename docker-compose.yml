@@ -1,0 +1,13 @@
+services:
+  mise:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=file:/data/dev.db
+    volumes:
+      - mise_data:/data
+    restart: unless-stopped
+
+volumes:
+  mise_data:

@@ -1,97 +1,78 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import { randomUUID } from "crypto";
-import { execFile } from "child_process";
-import { promisify } from "util";
+import { prisma } from "@/lib/prisma";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { spawn } from "node:child_process";
 
-export const runtime = "nodejs"; // necesario (fs + child_process)
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const execFileAsync = promisify(execFile);
+function run(cmd: string, args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: "inherit" });
+    p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Exit ${code}`))));
+  });
+}
 
 export async function POST(req: Request) {
-  try {
-    const form = await req.formData();
-    const file = form.get("pdf");
+  const form = await req.formData();
+  const files = form.getAll("files") as File[];
 
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "Falta el campo 'pdf' (File)" }, { status: 400 });
-    }
-
-  const name = (file as any).name?.toLowerCase?.() ?? "";
-  const looksPdf = file.type === "application/pdf" || name.endsWith(".pdf");
-
-  if (!looksPdf) {
-    return NextResponse.json({ error: "El archivo no es PDF" }, { status: 400 });
+  if (!files?.length) {
+    return NextResponse.json({ error: "No files" }, { status: 400 });
   }
 
-    const tmpDir = path.join(os.tmpdir(), `mise_${randomUUID()}`);
-    await fs.mkdir(tmpDir, { recursive: true });
+  const dir = path.join(os.tmpdir(), "mise-hf");
+  await mkdir(dir, { recursive: true });
 
-    const pdfPath = path.join(tmpDir, "input.pdf");
-    const outPath = path.join(tmpDir, "recipe.json");
+  const imported: any[] = [];
 
-    const buf = Buffer.from(await file.arrayBuffer());
-    await fs.writeFile(pdfPath, buf);
+  for (const f of files) {
+    const buf = Buffer.from(await f.arrayBuffer());
+    const pdfPath = path.join(dir, `${Date.now()}-${f.name.replaceAll(" ", "_")}`);
+    const jsonPath = pdfPath.replace(/\.pdf$/i, "") + ".json";
 
-    // En Windows a veces es "python" o "py"
-    const pythonCmd = process.platform === "win32" ? "py" : "python3";
+    await writeFile(pdfPath, buf);
 
-    await execFileAsync(pythonCmd, [
-      path.join(process.cwd(), "scripts", "extract_hf_pdf.py"),
-      pdfPath,
-      outPath,
-    ]);
+    // ⚠️ Ajusta esta ruta al script real de tu repo:
+    // por ejemplo: scripts/extract_hf_pdf.py
+    await run("py", ["scripts/extract_hf_pdf.py", pdfPath, jsonPath]);
 
-    const jsonText = await fs.readFile(outPath, "utf-8");
+    const out = JSON.parse(await readFile(jsonPath, "utf-8"));
 
+    // upsert
+    const saved = await prisma.recipe.upsert({
+      where: { id: out.id },
+      update: {
+        title: out.title,
+        description: out.description,
+        mealType: out.mealType,
+        timeMin: out.timeMin,
+        costTier: out.costTier,
+        difficulty: out.difficulty,
+        tags: out.tags,
+        active: !!out.active,
+        ingredients: out.ingredients,
+        steps: out.steps,
+      },
+      create: {
+        id: out.id,
+        title: out.title,
+        description: out.description,
+        mealType: out.mealType,
+        timeMin: out.timeMin,
+        costTier: out.costTier,
+        difficulty: out.difficulty,
+        tags: out.tags,
+        active: !!out.active,
+        ingredients: out.ingredients,
+        steps: out.steps,
+      },
+    });
 
-    function ensureEsCa<T extends { es?: string; ca?: string }>(obj: T): T {
-  if (!obj) return obj;
-  if (!obj.es) obj.es = "";
-  if (!obj.ca) obj.ca = obj.es;
-  return obj;
-}
-
-function normalizeRecipeLangs(recipe: any) {
-  recipe.title = ensureEsCa(recipe.title ?? { es: "", ca: "" });
-  recipe.description = ensureEsCa(recipe.description ?? { es: "", ca: "" });
-
-  // steps: si viene como {es:[], ca:[]} o similar
-  if (!recipe.steps) recipe.steps = { es: [], ca: [] };
-  if (!Array.isArray(recipe.steps.es)) recipe.steps.es = [];
-  if (!Array.isArray(recipe.steps.ca) || recipe.steps.ca.length === 0) {
-    recipe.steps.ca = [...recipe.steps.es];
+    imported.push(saved);
   }
 
-  // ingredientes: name {es,ca}
-  if (!Array.isArray(recipe.ingredients)) recipe.ingredients = [];
-  recipe.ingredients = recipe.ingredients.map((ing: any) => {
-    // si name llega como string, lo convertimos
-    const nameObj =
-      typeof ing.name === "string"
-        ? { es: ing.name, ca: ing.name }
-        : ensureEsCa(ing.name ?? { es: "", ca: "" });
-
-    // si falta qty2/qty4 textos, déjalos como undefined
-    return { ...ing, name: nameObj };
-  });
-
-  return recipe;
-}
-
-  let recipe = JSON.parse(jsonText);
-  recipe = normalizeRecipeLangs(recipe);
-
-    // Limpieza best-effort
-    await fs.rm(tmpDir, { recursive: true, force: true });
-
-    return NextResponse.json({ recipe });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: "Error importando PDF", detail: String(err?.message ?? err) },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ count: imported.length, recipes: imported });
 }

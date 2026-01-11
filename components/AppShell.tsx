@@ -96,24 +96,57 @@ export function AppShell() {
     setShop(null);
   }
 
-  function renderRichMultiline(text: string) {
-    return text.split("\n").map((line, i) => {
-      const trimmed = line.trim();
+function RichText({ text }: { text: string }) {
+  // interpreta **bold** y _italic_
+  const out: React.ReactNode[] = [];
+  const re = /(\*\*[^*]+\*\*|_[^_]+_)/g;
 
-      // ✅ cursiva si viene envuelto en _..._
-      const isItalic = trimmed.startsWith("_") && trimmed.endsWith("_") && trimmed.length >= 2;
-      const content = isItalic ? trimmed.slice(1, -1) : line;
+  let last = 0;
+  let m: RegExpExecArray | null;
 
-      // ✅ negrita con **...**
-      const parts = content.split(/\*\*(.+?)\*\*/g);
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(<span key={out.length}>{text.slice(last, m.index)}</span>);
 
-      const rendered = parts.map((p, j) =>
-        j % 2 === 1 ? <strong key={j}>{p}</strong> : <span key={j}>{p}</span>
-      );
+    const token = m[0];
+    if (token.startsWith("**")) out.push(<strong key={out.length}>{token.slice(2, -2)}</strong>);
+    else out.push(<em key={out.length}>{token.slice(1, -1)}</em>);
 
-      return isItalic ? <em key={i}>{rendered}</em> : <div key={i}>{rendered}</div>;
-    });
+    last = m.index + token.length;
   }
+
+  if (last < text.length) out.push(<span key={out.length}>{text.slice(last)}</span>);
+  return <>{out}</>;
+}
+
+function renderStepBody(bodyLines: string[]) {
+  // bodyLines viene con "• ..." y "_CONSEJO: ..._"
+  return (
+    <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+      {bodyLines.map((raw, i) => {
+        const line = raw.trim();
+        if (!line) return null;
+
+        // línea en cursiva (CONSEJO/RECUERDA) sin bullet
+        if (line.startsWith("_") && line.endsWith("_")) {
+          return (
+            <li key={i} style={{ listStyle: "none", marginLeft: -18 }}>
+              <em><RichText text={line.slice(1, -1)} /></em>
+            </li>
+          );
+        }
+
+        // bullet normal
+        const clean = line.startsWith("•") ? line.slice(1).trim() : line;
+        return (
+          <li key={i}>
+            <RichText text={clean} />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 
   async function generateShop() {
     if (!today) return;
@@ -234,19 +267,27 @@ export function AppShell() {
                <h3 style={styles.h3}>Pasos</h3>
 
                 <div style={styles.stepsGrid}>
-                {today.steps[lang].map((s, idx) => {
-                  const [titleLine, ...rest] = s.split("\n");
-                  const title = (titleLine || "").trim();
-                  const body = rest.join("\n").trim();
+                  {today.steps[lang].map((s, idx) => {
+                    const lines = (s ?? "").split("\n").map(l => l.trim()).filter(Boolean);
 
-                  return (
-                    <div key={idx} style={styles.stepCard}>
-                      <div style={styles.stepTitle}>{title || `Paso ${idx + 1}`}</div>
-                      <div style={styles.stepText}>{renderRichMultiline(body)}</div>
-                    </div>
-                  );
-                })}
-              </div>
+                    // tu extractor genera: "Titulo\n• ...\n• ...\n_CONSEJO: ..._"
+                    const title = lines[0] ?? `Paso ${idx + 1}`;
+                    const body = lines.slice(1);
+
+                    return (
+                      <div key={idx} style={styles.stepCard}>
+                        <div style={styles.stepTitle}>
+                          <RichText text={title} />
+                        </div>
+
+                        <div style={styles.stepText}>
+                          {renderStepBody(body)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
 
 
                 <div style={styles.btnRow}>
@@ -261,17 +302,13 @@ export function AppShell() {
           <section style={styles.card}>
             <h2 style={styles.h2}>{t.recipes}</h2>
 
-            <ImportHelloFreshPdf
-                onImported={async (r) => {
-                    // refresca lista de recetas en UI
-                    setRecipes(await db.recipes.toArray());
-
-                    // opcional: ponerla como "Hoy" directamente
-                    setToday(r);
-                    setShop(null);
-                    setTab("today");
-                }}
-                />
+           <ImportHelloFreshPdf
+            onDone={async () => {
+              const res = await fetch("/api/recipes", { cache: "no-store" });
+              const data = await res.json();
+              setRecipes(data);
+            }}
+          />
 
             <div style={styles.grid}>
               {recipes.filter(r => r.active).map(r => (
