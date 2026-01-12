@@ -1,13 +1,26 @@
 services:
-  mise:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mise
+      POSTGRES_PASSWORD: mise
+      POSTGRES_DB: mise
+    ports:
+      - "5432:5432"
+    volumes:
+      - mise_pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  app:
     build: .
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=file:/data/dev.db
-    volumes:
-      - mise_data:/data
+      DATABASE_URL: postgresql://mise:mise@db:5432/mise?schema=public
+    depends_on:
+      - db
     restart: unless-stopped
-
+    env_file:
+      - .env.docker
 volumes:
-  mise_data:
+  mise_pg:

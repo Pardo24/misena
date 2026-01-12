@@ -37,7 +37,8 @@ export async function POST(req: Request) {
 
     // ⚠️ Ajusta esta ruta al script real de tu repo:
     // por ejemplo: scripts/extract_hf_pdf.py
-    await run("py", ["scripts/extract_hf_pdf.py", pdfPath, jsonPath]);
+  await run("python", ["scripts/extract_hf_pdf.py", pdfPath, jsonPath]);
+
 
     const out = JSON.parse(await readFile(jsonPath, "utf-8"));
 
