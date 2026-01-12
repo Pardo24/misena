@@ -6,6 +6,17 @@ datasource db {
   provider = "postgresql"
 }
 
+model QueueItem {
+  id        String   @id @default(cuid())
+  recipeId  String
+  position  Int
+  createdAt DateTime @default(now())
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId])
+  @@index([position])
+}
 
 model Recipe {
   id          String   @id
@@ -23,4 +34,6 @@ model Recipe {
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  queueItems  QueueItem[]  // 👈 añade esta línea
 }

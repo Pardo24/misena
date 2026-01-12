@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/db";
 import type { Lang, Mode, Recipe, ShoppingItem } from "@/lib/types";
-import { buildShoppingList, ensureSeeded, getSettings, markCooked, pickTodayRecipe, setPantryItem, updateSettings } from "@/lib/logic";
+import { buildShoppingList, getSettings, markCooked, pickTodayRecipeFromList, setPantryItem, updateSettings } from "@/lib/logic";
 import { ImportHelloFreshPdf } from "@/components/ImportHelloFreshPdf";
 
 type Tab = "today" | "recipes" | "shop" | "pantry" | "settings";
@@ -18,30 +18,58 @@ export function AppShell() {
   const [shop, setShop] = useState<ShoppingItem[] | null>(null);
 
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [recipeQuery, setRecipeQuery] = useState("");
+
   const [pantryText, setPantryText] = useState("");
   const [pantryList, setPantryList] = useState<{ nameKey: string; alwaysHave: boolean }[]>([]);
+ 
+  const [queue, setQueue] = useState<any[]>([]);
+
+  async function loadRecipesFromServer(): Promise<Recipe[]> {
+    const res = await fetch("/api/recipes", { cache: "no-store" });
+    if (!res.ok) throw new Error("No se pudieron cargar recetas");
+    const data = (await res.json()) as Recipe[];
+    setRecipes(data);
+    return data;
+  }
+
 
   useEffect(() => {
-    (async () => {
-      await ensureSeeded();
-      const s = await getSettings();
-      setSettings(s);
-      const rs = await db.recipes.toArray();
-      setRecipes(rs);
-      const p = await db.pantry.toArray();
-      setPantryList(p.map(x => ({ nameKey: x.nameKey, alwaysHave: !!x.alwaysHave })));
-      setReady(true);
-    })();
-  }, []);
+  (async () => {
+    const s = await getSettings(); // Dexie OK
+    setSettings(s);
+
+    const serverRecipes = await loadRecipesFromServer(); // ✅ una sola vez
+
+    const cutoff = Date.now() - s.noRepeatDays * 24 * 60 * 60 * 1000;
+    const recent = await db.history.where("cookedAt").above(cutoff).toArray();
+    const recentSet = new Set(recent.map(h => h.recipeId));
+
+    const today = pickTodayRecipeFromList(serverRecipes, recentSet, s);
+    setToday(today);
+  })().catch(console.error);
+}, []);
 
   useEffect(() => {
-    if (!ready) return;
-    (async () => {
-      const r = await pickTodayRecipe();
-      setToday(r);
-      setShop(null);
-    })();
-  }, [ready, settings?.lang, settings?.mode, settings?.maxTimeMin, settings?.maxCostTier]);
+  if (!settings) return;
+  if (!recipes || recipes.length === 0) return;
+
+  (async () => {
+    const cutoff = Date.now() - settings.noRepeatDays * 24 * 60 * 60 * 1000;
+    const recent = await db.history.where("cookedAt").above(cutoff).toArray();
+    const recentSet = new Set(recent.map(h => h.recipeId));
+
+    const r = pickTodayRecipeFromList(recipes, recentSet, settings);
+    setToday(r);
+    setShop(null);
+  })().catch(console.error);
+}, [
+  settings?.mode,
+  settings?.maxTimeMin,
+  settings?.maxCostTier,
+  settings?.noRepeatDays,
+  recipes,
+]);
 
   const lang: Lang = settings?.lang ?? "es";
 
@@ -91,10 +119,19 @@ export function AppShell() {
   }, [lang]);
 
   async function reroll() {
-    const r = await pickTodayRecipe();
-    setToday(r);
-    setShop(null);
-  }
+  const settings = await getSettings();
+  const cutoff = Date.now() - settings.noRepeatDays * 24 * 60 * 60 * 1000;
+  const recent = await db.history.where("cookedAt").above(cutoff).toArray();
+  const recentSet = new Set(recent.map(h => h.recipeId));
+
+  const next = pickTodayRecipeFromList(recipes, recentSet, settings);
+  setToday(next);
+}
+
+  async function loadQueue() {
+  const res = await fetch("/api/queue", { cache: "no-store" });
+  setQueue(await res.json());
+}
 
 function RichText({ text }: { text: string }) {
   // interpreta **bold** y _italic_
@@ -147,6 +184,35 @@ function renderStepBody(bodyLines: string[]) {
   );
 }
 
+async function toggleQueue(recipeId: string) {
+  const inQueue = queue.some((q) => q.recipeId === recipeId);
+
+    if (inQueue) {
+      await fetch(`/api/queue?recipeId=${encodeURIComponent(recipeId)}`, { method: "DELETE" });
+    } else {
+      await fetch("/api/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipeId }),
+      });
+    }
+
+    await loadQueue();
+}
+
+  async function pickFromQueue() {
+    if (!queue.length) return;
+    const first = queue[0];
+    const r = first.recipe;
+    if (!r) return;
+
+    setToday(r);
+    setShop(null);
+    setTab("today");
+
+    await fetch(`/api/queue?recipeId=${encodeURIComponent(first.recipeId)}`, { method: "DELETE" });
+    await loadQueue();
+  }
 
   async function generateShop() {
     if (!today) return;
@@ -205,6 +271,19 @@ function renderStepBody(bodyLines: string[]) {
     const p = await db.pantry.toArray();
     setPantryList(p.map(x => ({ nameKey: x.nameKey, alwaysHave: !!x.alwaysHave })));
   }
+const q = recipeQuery.trim().toLowerCase();
+
+const filteredRecipes = recipes
+  .filter(r => r.active === 1)
+  .filter(r => {
+    if (!q) return true;
+    const title = (r.title?.[lang] || r.title?.es || "").toLowerCase();
+    const desc = (r.description?.[lang] || r.description?.es || "").toLowerCase();
+    const ing = (r.ingredients ?? [])
+      .map((i: any) => (i?.name?.[lang] || i?.name?.es || "").toLowerCase())
+      .join(" ");
+    return title.includes(q) || desc.includes(q) || ing.includes(q);
+  });
 
   if (!ready || !settings) {
     return <div style={styles.wrap}><div style={styles.card}>Cargando…</div></div>;
@@ -302,16 +381,72 @@ function renderStepBody(bodyLines: string[]) {
           <section style={styles.card}>
             <h2 style={styles.h2}>{t.recipes}</h2>
 
-           <ImportHelloFreshPdf
-            onDone={async () => {
-              const res = await fetch("/api/recipes", { cache: "no-store" });
-              const data = await res.json();
-              setRecipes(data);
-            }}
-          />
+          <ImportHelloFreshPdf onDone={loadRecipesFromServer} />
+            <div style={styles.searchRow}>
+            <input
+              value={recipeQuery}
+              onChange={(e) => setRecipeQuery(e.target.value)}
+              placeholder="Buscar por nombre o ingrediente…"
+              style={styles.searchInput}
+            />
+            {recipeQuery && (
+              <button type="button" style={styles.searchClear} onClick={() => setRecipeQuery("")}>
+                ✕
+              </button>
+            )}
+           {queue.length > 0 && (
+              <div style={styles.queueBar}>
+                <div style={{ fontWeight: 700 }}>Cola ({queue.length})</div>
 
+                <div style={styles.queueChips}>
+                  {queue
+                    .map((q) => q.recipe)        // q incluye recipe porque el GET hace include: { recipe: true }
+                    .filter(Boolean)
+                    .map((r: any) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        style={styles.chip}
+                        onClick={() => {
+                          setToday(r);
+                          setShop(null);
+                          setTab("today");
+                        }}
+                      >
+                        {r.title?.[lang] || r.title?.es}
+                      </button>
+                    ))}
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" style={styles.btnSmallPrimary} onClick={pickFromQueue}>
+                    Cocinar siguiente
+                  </button>
+
+                  <button
+                    type="button"
+                    style={styles.btnSmall}
+                    onClick={async () => {
+                      // vacía la cola en servidor (una a una, simple)
+                      await Promise.all(
+                        queue.map((q: any) =>
+                          fetch(`/api/queue?recipeId=${encodeURIComponent(q.recipeId)}`, { method: "DELETE" })
+                        )
+                      );
+                      await loadQueue();
+                    }}
+                  >
+                    Vaciar
+                  </button>
+                </div>
+              </div>
+            )}
+
+          </div>
             <div style={styles.grid}>
-              {recipes.filter(r => r.active).map(r => (
+            {filteredRecipes.map((r) => {
+              const inQueue = queue.some(q => q.recipeId === r.id);
+              return (
                 <button
                   key={r.id}
                   style={styles.recipeCard}
@@ -321,15 +456,51 @@ function renderStepBody(bodyLines: string[]) {
                     setTab("today");
                   }}
                 >
-                  <div style={styles.recipeTitle}>{r.title[lang]}</div>
+                  <div style={styles.recipeTopRow}>
+                    <div style={styles.recipeTitle}>{r.title?.[lang] || r.title?.es}</div>
+
+                    <div style={styles.recipeIcons}>
+                      {/* Poner como Hoy */}
+                      <button
+                        type="button"
+                        title="Poner como receta de hoy"
+                        style={styles.iconBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setToday(r);
+                          setShop(null);
+                          setTab("today");
+                        }}
+                      >
+                        ☀️
+                      </button>
+
+                      {/* Cola */}
+                      <button
+                        type="button"
+                        title={inQueue ? "Quitar de la cola" : "Añadir a la cola"}
+                        style={inQueue ? styles.iconBtnActive : styles.iconBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleQueue(r.id);
+                        }}
+                      >
+                        {inQueue ? "✓" : "＋"}
+                      </button>
+                    </div>
+                  </div>
+
                   <div style={styles.metaRow}>
                     <span style={styles.badgeSmall}>⏱️ {r.timeMin}</span>
                     <span style={styles.badgeSmall}>💸 {"€".repeat(r.costTier)}</span>
                   </div>
-                  <div style={styles.recipeDesc}>{r.description[lang]}</div>
+
+                  <div style={styles.recipeDesc}>{r.description?.[lang] || r.description?.es}</div>
                 </button>
-              ))}
-            </div>
+              );
+            })}
+          </div>
+
             <p style={styles.mutedP}>Tip: toca una receta para ponerla como “Hoy”.</p>
           </section>
         )}
@@ -530,5 +701,91 @@ const styles: Record<string, React.CSSProperties> = {
   stepCard: {  border: "1px solid #eee",  borderRadius: 14,  padding: 12,  background: "#fff", minHeight: 110},
   stepTitle: {  fontWeight: 800,  marginBottom: 8},
   stepText: {  lineHeight: 1.35,  color: "#222",  whiteSpace: "pre-wrap", fontSize: 14},
+searchRow: {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  marginBottom: 12,
+},
+searchInput: {
+  flex: 1,
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid #ddd",
+  background: "#fafafa",
+  outline: "none",
+},
+searchClear: {
+  width: 38,
+  height: 38,
+  borderRadius: 12,
+  border: "1px solid #ddd",
+  background: "#fff",
+  cursor: "pointer",
+},
+
+queueBar: {
+  border: "1px solid #eee",
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12,
+  background: "#fff",
+  display: "flex",
+  gap: 12,
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+},
+queueChips: {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  alignItems: "center",
+  flex: 1,
+},
+chip: {
+  padding: "6px 10px",
+  borderRadius: 999,
+  border: "1px solid #e5e5e5",
+  background: "#fafafa",
+  cursor: "pointer",
+  fontSize: 13,
+},
+btnSmallPrimary: {
+  padding: "8px 10px",
+  borderRadius: 12,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  cursor: "pointer",
+},
+
+recipeTopRow: {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 10,
+},
+recipeIcons: {
+  display: "flex",
+  gap: 8,
+},
+iconBtn: {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: "1px solid #e5e5e5",
+  background: "#fff",
+  cursor: "pointer",
+},
+iconBtnActive: {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  cursor: "pointer",
+},
 
 };

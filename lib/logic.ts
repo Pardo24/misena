@@ -4,13 +4,6 @@ import { defaultSettings, seedRecipes } from "./seed";
 
 const normalize = (s: string) => s.trim().toLowerCase();
 
-export async function ensureSeeded() {
-  const settings = await db.settings.get("singleton");
-  if (!settings) await db.settings.put(defaultSettings);
-
-  const count = await db.recipes.count();
-  if (count === 0) await db.recipes.bulkPut(seedRecipes);
-}
 
 export async function getSettings() {
   return (await db.settings.get("singleton")) ?? defaultSettings;
@@ -27,23 +20,21 @@ function modeMaxTime(mode: Mode, fallbackMax: number) {
   return fallbackMax;
 }
 
-export async function pickTodayRecipe(): Promise<Recipe | null> {
-  const settings = await getSettings();
+export function pickTodayRecipeFromList(
+  recipes: Recipe[],
+  recentRecipeIds: Set<string>,
+  settings: { mode: any; maxTimeMin: number; maxCostTier: number }
+): Recipe | null {
   const maxTime = modeMaxTime(settings.mode, settings.maxTimeMin);
 
-  const recipes = await db.recipes
-    .where("active").equals(1)
-    .filter(r => r.timeMin <= maxTime && r.costTier <= settings.maxCostTier)
-    .toArray();
+  const eligible = recipes
+    .filter(r => !!r.active)
+    .filter(r => r.timeMin <= maxTime && r.costTier <= settings.maxCostTier);
 
-  if (recipes.length === 0) return null;
+  if (eligible.length === 0) return null;
 
-  const cutoff = Date.now() - settings.noRepeatDays * 24 * 60 * 60 * 1000;
-  const recent = await db.history.where("cookedAt").above(cutoff).toArray();
-  const recentSet = new Set(recent.map(h => h.recipeId));
-
-  const candidates = recipes.filter(r => !recentSet.has(r.id));
-  const pool = candidates.length ? candidates : recipes;
+  const candidates = eligible.filter(r => !recentRecipeIds.has(r.id));
+  const pool = candidates.length ? candidates : eligible;
 
   return pool[Math.floor(Math.random() * pool.length)] ?? null;
 }
