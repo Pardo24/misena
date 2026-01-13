@@ -32,7 +32,9 @@ export function AppShell() {
     setRecipes(data);
     return data;
   }
-
+  const reloadRecipes = async (): Promise<void> => {
+  await loadRecipesFromServer();
+};
 
   useEffect(() => {
   (async () => {
@@ -47,6 +49,7 @@ export function AppShell() {
 
     const today = pickTodayRecipeFromList(serverRecipes, recentSet, s);
     setToday(today);
+    setReady(true);
   })().catch(console.error);
 }, []);
 
@@ -273,8 +276,9 @@ async function toggleQueue(recipeId: string) {
   }
 const q = recipeQuery.trim().toLowerCase();
 
+const isActive = (r: any) => r.active === true || r.active === 1; 
 const filteredRecipes = recipes
-  .filter(r => r.active === 1)
+  .filter(isActive)
   .filter(r => {
     if (!q) return true;
     const title = (r.title?.[lang] || r.title?.es || "").toLowerCase();
@@ -381,7 +385,7 @@ const filteredRecipes = recipes
           <section style={styles.card}>
             <h2 style={styles.h2}>{t.recipes}</h2>
 
-          <ImportHelloFreshPdf onDone={loadRecipesFromServer} />
+          <ImportHelloFreshPdf onDone={reloadRecipes} />
             <div style={styles.searchRow}>
             <input
               value={recipeQuery}
