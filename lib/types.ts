@@ -70,3 +70,8 @@ export type ShoppingItem = {
   qtyText?: string;
 };
 
+export type LocalQueueItem = {
+  recipeId: string;      // primary key
+  position: number;
+  createdAt: Date;
+};

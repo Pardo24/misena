@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -18,7 +18,21 @@ export default function AuthPage() {
   const [password, setPassword] = useState("");
 
   const [busy, setBusy] = useState<"google" | "email" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const authErrorParam = params.get("error"); // string | null
+
+
+  useEffect(() => {
+    if (!authErrorParam) return;
+
+    const msg =
+        authErrorParam === "OAuthCallback" ? "Has cancelado el login con Google." :
+        authErrorParam === "OAuthAccountNotLinked" ? "Ese email ya existe con otro método. Entra con el método original." :
+        "No se pudo iniciar sesión. Prueba otra vez.";
+
+    setAuthError(msg);
+    }, [authErrorParam]);
 
   const title = useMemo(() => (mode === "login" ? "Bienvenido" : "Crear cuenta"), [mode]);
   const subtitle = useMemo(
@@ -30,37 +44,41 @@ export default function AuthPage() {
   );
 
   function switchMode(next: Mode) {
-    setError(null);
+    setAuthError(null);
     setMode(next);
     router.replace(`/auth?mode=${next}`);
   }
 
   function getReturnUrl() {
-  const tab = sessionStorage.getItem("mise:returnTab");
-  if (!tab) return "/";
-  sessionStorage.removeItem("mise:returnTab");
-  return `/?tab=${encodeURIComponent(tab)}`;
-}
+    const tab = sessionStorage.getItem("mise:returnTab");
+    if (!tab) return "/";
+    sessionStorage.removeItem("mise:returnTab");
+    return `/?tab=${encodeURIComponent(tab)}`;
+    }
 
-async function onGoogle() {
-  setError(null);
-  setBusy("google");
-  await signIn("google", { callbackUrl: getReturnUrl() });
-  setBusy(null);
-}
+    async function onGoogle() {
+    setAuthError(null);
+    setBusy("google");
+    await signIn("google", { callbackUrl: getReturnUrl() });
+    setBusy(null);
+    }
+
+    function goHome() {
+    router.push(getReturnUrl());
+    }
 
   async function onEmail() {
-    setError(null);
+    setAuthError(null);
     setBusy("email");
 
     const e = email.trim().toLowerCase();
     if (!e) {
-      setError("Escribe un email.");
+      setAuthError("Escribe un email.");
       setBusy(null);
       return;
     }
     if (password.length < 8) {
-      setError("El password debe tener mínimo 8 caracteres.");
+      setAuthError("El password debe tener mínimo 8 caracteres.");
       setBusy(null);
       return;
     }
@@ -76,8 +94,8 @@ async function onGoogle() {
 
         if (!res.ok) {
           const msg = await safeText(res);
-          if (res.status === 409) setError("Ese email ya existe. Prueba a iniciar sesión.");
-          else setError(msg || "No se pudo crear la cuenta.");
+          if (res.status === 409) setAuthError("Ese email ya existe. Prueba a iniciar sesión.");
+          else setAuthError(msg || "No se pudo crear la cuenta.");
           setBusy(null);
           return;
         }
@@ -91,14 +109,14 @@ async function onGoogle() {
       });
 
       if (!res || res.error) {
-        setError("Email o password incorrectos.");
+        setAuthError("Email o password incorrectos.");
         setBusy(null);
         return;
       }
 
       router.push(getReturnUrl());
     } catch (err) {
-      setError("Error inesperado.");
+      setAuthError("Error inesperado.");
     } finally {
       setBusy(null);
     }
@@ -107,7 +125,16 @@ async function onGoogle() {
   return (
     <div style={s.wrap}>
       <div style={s.card}>
-       
+       <header style={s.authHeader}>
+            <button type="button" style={s.authBack} onClick={goHome}>
+                ←
+            </button>
+
+            <div style={s.authBrand}>Misena</div>
+
+            <div style={{ width: 70 }} /> {/* spacer simétrico */}
+        </header>
+
         <h1 style={s.h1}>{title}</h1>
         <p style={s.p}>{subtitle}</p>
 
@@ -173,7 +200,7 @@ async function onGoogle() {
           />
         </div>
 
-        {error && <div style={s.errorBox}>{error}</div>}
+        {authError && <div style={s.alert}>{authError}</div>}
 
         <button style={s.btnPrimary} onClick={onEmail} disabled={busy !== null}>
           {busy === "email"
@@ -241,6 +268,34 @@ const s: Record<string, React.CSSProperties> = {
     background: "linear-gradient(180deg, #ffffff 0%, #f6f6f6 100%)",
     color: "#111",
   },
+  authHeader: {
+  width: "min(520px, 100%)",
+  margin: "0 auto",
+  padding: "14px 12px 10px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+},
+
+authBrand: {
+  fontWeight: 800,
+  letterSpacing: -0.2,
+},
+
+authBack: {
+  height: 34,
+  padding: "0 10px",
+  borderRadius: 10,
+  border: "1px solid #eee",
+  background: "#fff",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 700,
+},
+
   card: {
     width: "min(420px, 100%)",
     background: "#fff",
@@ -375,6 +430,14 @@ switchBtn: {
   alignItems: "center",
   justifyContent: "center",
   gap: 8,
-}
-
+},
+alert: {
+  background: "#fff5f5",
+  border: "1px solid #ffd6d6",
+  color: "#b42318",
+  padding: "10px 12px",
+  borderRadius: 14,
+  fontSize: 13,
+  marginBottom: 10,
+},
 };

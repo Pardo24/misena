@@ -27,6 +27,10 @@ export function AppShell() {
   const [pantryList, setPantryList] = useState<{ nameKey: string; alwaysHave: boolean }[]>([]);
  
   const [queue, setQueue] = useState<any[]>([]);
+  const [todayLoading, setTodayLoading] = useState(true);
+  const [todayFadeIn, setTodayFadeIn] = useState(true);
+
+
 
   const { data: session } = useSession();
 
@@ -89,7 +93,10 @@ async function isLoggedIn(): Promise<boolean> {
 
     const today = pickTodayRecipeFromList(serverRecipes, recentSet, s);
     setToday(today);
+    setTodayLoading(false);
+    setTodayFadeIn(true);
     setReady(true);
+
   })().catch(console.error);
 }, []);
 
@@ -103,8 +110,7 @@ async function isLoggedIn(): Promise<boolean> {
     const recentSet = new Set(recent.map(h => h.recipeId));
 
     const r = pickTodayRecipeFromList(recipes, recentSet, settings);
-    setToday(r);
-    setShop(null);
+    setTodayWithTransition(r);
   })().catch(console.error);
 }, [
   settings?.mode,
@@ -170,89 +176,106 @@ async function isLoggedIn(): Promise<boolean> {
   const recentSet = new Set(recent.map(h => h.recipeId));
 
   const next = pickTodayRecipeFromList(recipes, recentSet, settings);
-  setToday(next);
-}
+  setTodayWithTransition(next);
+  }
 
-const queueIdSet = useMemo(() => {
-  return new Set(queue.map((q: any) => q.recipeId).filter(Boolean));
-}, [queue]);
+  function setTodayWithTransition(next: Recipe | null) {
+    // pequeña animación: fade-out -> swap -> fade-in
+    setTodayFadeIn(false);
+    setTodayLoading(true);
+
+    window.setTimeout(() => {
+      setToday(next);
+      setShop(null);
+
+      // fade in
+      setTodayFadeIn(true);
+      setTodayLoading(false);
+    }, 130);
+  }
+
+  const queueIdSet = useMemo(() => {
+    return new Set(queue.map((q: any) => q.recipeId).filter(Boolean));
+  }, [queue]);
 
 
-async function loadQueue() {
+  async function loadQueue() {
   const logged = await isLoggedIn();
 
   if (!logged) {
-    // TODO: cargar de Dexie/local si quieres persistencia local,
-    // o simplemente dejar queue en memoria si te basta.
-    setQueue([]);
+    const local = await db.queue.orderBy("position").toArray();
+    // necesitas “hydratar” recipe:
+    const recipeMap = new Map(recipes.map(r => [r.id, r]));
+    setQueue(local.map(q => ({ ...q, recipe: recipeMap.get(q.recipeId) })));
     return;
   }
 
   const res = await fetch("/api/queue", { cache: "no-store" });
-  if (!res.ok) {
-    setQueue([]);
-    return;
-  }
-  setQueue(await res.json());
+  setQueue(res.ok ? await res.json() : []);
 }
 
-useEffect(() => {
-  if (tab === "recipes" || tab === "plan") {
-    loadQueue().catch(console.error);
+
+  useEffect(() => {
+    if (tab === "recipes" || tab === "plan") {
+      loadQueue().catch(console.error);
+    }
+  }, [tab]);
+
+
+  function RichText({ text }: { text: string }) {
+    // interpreta **bold** y _italic_
+    const out: React.ReactNode[] = [];
+    const re = /(\*\*[^*]+\*\*|_[^_]+_)/g;
+
+    let last = 0;
+    let m: RegExpExecArray | null;
+
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push(<span key={out.length}>{text.slice(last, m.index)}</span>);
+
+      const token = m[0];
+      if (token.startsWith("**")) out.push(<strong key={out.length}>{token.slice(2, -2)}</strong>);
+      else out.push(<em key={out.length}>{token.slice(1, -1)}</em>);
+
+      last = m.index + token.length;
+    }
+
+    if (last < text.length) out.push(<span key={out.length}>{text.slice(last)}</span>);
+    return <>{out}</>;
   }
-}, [tab]);
 
+  function renderStepBody(bodyLines: string[]) {
+    return (
+      <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+        {bodyLines.map((raw, i) => {
+          const line = raw.trim();
+          if (!line) return null;
 
-function RichText({ text }: { text: string }) {
-  // interpreta **bold** y _italic_
-  const out: React.ReactNode[] = [];
-  const re = /(\*\*[^*]+\*\*|_[^_]+_)/g;
+          // línea en cursiva (CONSEJO/RECUERDA) sin bullet
+          if (line.startsWith("_") && line.endsWith("_")) {
+            return (
+              <li key={i} style={{ listStyle: "none", marginLeft: -18 }}>
+                <div style={styles.tipBox}>
+                  <div style={styles.tipText}>
+                    <em><RichText text={line.slice(1, -1)} /></em>
+                  </div>
+                </div>
 
-  let last = 0;
-  let m: RegExpExecArray | null;
+              </li>
+            );
+          }
 
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(<span key={out.length}>{text.slice(last, m.index)}</span>);
-
-    const token = m[0];
-    if (token.startsWith("**")) out.push(<strong key={out.length}>{token.slice(2, -2)}</strong>);
-    else out.push(<em key={out.length}>{token.slice(1, -1)}</em>);
-
-    last = m.index + token.length;
-  }
-
-  if (last < text.length) out.push(<span key={out.length}>{text.slice(last)}</span>);
-  return <>{out}</>;
-}
-
-function renderStepBody(bodyLines: string[]) {
-  // bodyLines viene con "• ..." y "_CONSEJO: ..._"
-  return (
-    <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
-      {bodyLines.map((raw, i) => {
-        const line = raw.trim();
-        if (!line) return null;
-
-        // línea en cursiva (CONSEJO/RECUERDA) sin bullet
-        if (line.startsWith("_") && line.endsWith("_")) {
+          const clean = line.startsWith("•") ? line.slice(1).trim() : line;
           return (
-            <li key={i} style={{ listStyle: "none", marginLeft: -18 }}>
-              <em><RichText text={line.slice(1, -1)} /></em>
+            <li key={i}>
+              <RichText text={clean} />
             </li>
           );
-        }
+        })}
+      </ul>
+    );
+  }
 
-        // bullet normal
-        const clean = line.startsWith("•") ? line.slice(1).trim() : line;
-        return (
-          <li key={i}>
-            <RichText text={clean} />
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
 
 async function moveQueue(recipeId: string, dir: "up" | "down") {
   const res = await fetch("/api/queue/reorder", {
@@ -318,14 +341,23 @@ function parseQtyText(q: string) {
 }
 
 async function toggleQueue(recipeId: string) {
-
   const logged = await isLoggedIn();
 
-   if (!logged) {
+  if (!logged) {
+    const existing = await db.queue.get(recipeId);
+    if (existing) {
+      await db.queue.delete(recipeId);
+    } else {
+      const maxPos = (await db.queue.toArray()).reduce((m, x) => Math.max(m, x.position ?? 0), 0);
+     await db.queue.put({recipeId,position: maxPos + 1,createdAt: new Date(),});
+
+    }
+    await loadQueue();
     return;
   }
-  const inQueue = queue.some((q: any) => q.recipeId === recipeId);
 
+  // server
+  const inQueue = queue.some((q: any) => q.recipeId === recipeId);
   const res = await fetch(
     inQueue ? `/api/queue?recipeId=${encodeURIComponent(recipeId)}` : "/api/queue",
     {
@@ -335,14 +367,9 @@ async function toggleQueue(recipeId: string) {
     }
   );
 
-  if (!res.ok) {
-    console.error("Queue API failed", res.status, await res.text());
-    return;
-  }
-
+  if (!res.ok) return;
   await loadQueue();
 }
-
 
   async function pickFromQueue() {
     if (!queue.length) return;
@@ -350,8 +377,7 @@ async function toggleQueue(recipeId: string) {
     const r = first.recipe;
     if (!r) return;
 
-    setToday(r);
-    setShop(null);
+    setTodayWithTransition(r);
     setTab("today");
 
     await fetch(`/api/queue?recipeId=${encodeURIComponent(first.recipeId)}`, { method: "DELETE" });
@@ -436,60 +462,39 @@ const filteredRecipes = recipes
 
   return (
     <div style={styles.wrap}>
-        <header style={styles.header}>
-          <div style={styles.headerRow}>
-            <nav style={styles.nav}>
-              <TabBtn active={tab === "today"} onClick={() => setTab("today")}>{t.today}</TabBtn>
-              <TabBtn active={tab === "recipes"} onClick={() => setTab("recipes")}>{t.recipes}</TabBtn>
-              <TabBtn active={tab === "plan"} onClick={() => setTab("plan")}>{t.plan}</TabBtn>
-              <TabBtn active={tab === "shop"} onClick={() => setTab("shop")}>{t.shop}</TabBtn>
-              <TabBtn active={tab === "pantry"} onClick={() => setTab("pantry")}>{t.pantry}</TabBtn>
-              <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>{t.settings}</TabBtn>
-            </nav>
+       <header style={styles.header}>
+        <div style={styles.headerBar}>
+          <div style={styles.brand}>Misena</div>
 
-            {!session ? (
-              <button
-                type="button"
-                style={styles.authTab}
-                onClick={() => {
-                  sessionStorage.setItem("mise:returnTab", tab);
-                  router.push("/auth?mode=login");
-                }}
+          {!session ? (
+            <button
+              type="button"
+              style={styles.loginBtn}
+              onClick={() => {
+                sessionStorage.setItem("mise:returnTab", tab);
+                router.push("/auth?mode=login");
+              }}
+            >
+              Login
+            </button>
+          ) : (
+            <button type="button" style={styles.loginBtn} onClick={() => signOut({ callbackUrl: "/" })}>
+              Logout
+            </button>
+          )}
+        </div>
+      </header>
 
-                aria-label="Entrar"
-                title="Entrar"
-              >
-                <span style={styles.authTabIcon}>🔒</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                style={styles.authTab}
-                onClick={() => signOut({ callbackUrl: "/" })}
-                aria-label="Salir"
-                title="Salir"
-              >
-                {session.user?.image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={session.user.image} alt="" style={styles.authAvatar} />
-                ) : (
-                  <span style={styles.authTabIcon}>
-                    {String(session.user?.name || session.user?.email || "U").trim().slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-              </button>
-            )}
-          </div>
-        </header>
-
-
-      <main style={styles.main}>
+      <main style={styles.mainWithBottomNav}>
         {tab === "today" && (
           <section style={styles.card}>
-            {!today ? (
+           {todayLoading ? (
+              <TodaySkeleton />
+            ) : !today ? (
               <div>{t.empty}</div>
             ) : (
-              <>
+              <div style={todayFadeIn ? styles.fadeIn : styles.fadeOut}>
+                <>
                 <h2 style={styles.h2}>{today.title[lang]}</h2>
                 <p style={styles.p}>{today.description[lang]}</p>
 
@@ -500,29 +505,34 @@ const filteredRecipes = recipes
                   {settings.doublePortions && <span style={styles.badge}>🍱 sobras</span>}
                 </div>
 
-                <div style={styles.btnRow}>
-                  <button style={styles.btn} onClick={reroll}>{t.reroll}</button>
+                <div style={styles.ctaRow}>
+                  <button style={styles.btnGhost} onClick={reroll}>{t.reroll}</button>
                   <button style={styles.btnPrimary} onClick={generateShop}>{t.makeList}</button>
                 </div>
 
+
                 <hr style={styles.hr} />
 
+
                 <h3 style={styles.h3}>Ingredientes</h3>
-                <ul style={styles.ul}>
-                  {today.ingredients.map((ing, idx) => (
-                    <li key={idx} style={styles.li}>
-                      <span>{ing.name[lang]}</span>
-                     <span style={styles.muted}>
-                      {(() => {
-                        const hf = settings.doublePortions ? ing.qty4Text : ing.qty2Text;
-                        const legacy = ing.qtyText ?? `${ing.qty ?? ""} ${ing.unit ?? ""}`.trim();
-                        return hf ?? legacy;
-                      })()}
-                      {ing.pantry ? " (despensa)" : ""}
-                    </span>
-                    </li>
-                  ))}
-                </ul>
+                
+             
+                  <ul style={styles.ul}>
+                    {today.ingredients.map((ing, idx) => (
+                      <li key={idx} style={styles.li}>
+                        <span>{ing.name[lang]}</span>
+                        <span style={styles.muted}>
+                          {(() => {
+                            const hf = settings.doublePortions ? ing.qty4Text : ing.qty2Text;
+                            const legacy = ing.qtyText ?? `${ing.qty ?? ""} ${ing.unit ?? ""}`.trim();
+                            return hf ?? legacy;
+                          })()}
+                          {ing.pantry ? " (despensa)" : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                
 
                <h3 style={styles.h3}>Pasos</h3>
 
@@ -536,8 +546,13 @@ const filteredRecipes = recipes
 
                     return (
                       <div key={idx} style={styles.stepCard}>
-                        <div style={styles.stepTitle}>
-                          <RichText text={title} />
+                        <div style={styles.stepHeader}>
+                          <div style={styles.stepNum}>{idx + 1}</div>
+                          <div style={styles.stepHeaderText}>
+                            <div style={styles.stepTitle}>
+                              <RichText text={title} />
+                            </div>
+                          </div>
                         </div>
 
                         <div style={styles.stepText}>
@@ -547,14 +562,15 @@ const filteredRecipes = recipes
                     );
                   })}
                 </div>
-
-
-
-                <div style={styles.btnRow}>
-                  <button style={styles.btn} onClick={cooked}>{t.cookThis}</button>
+                <div style={styles.endCta}>
+                  <button type="button" style={styles.endCtaBtn} onClick={cooked}>
+                    {t.cookThis}
+                  </button>
                 </div>
               </>
+              </div>
             )}
+            
           </section>
         )}
 
@@ -590,16 +606,14 @@ const filteredRecipes = recipes
                   tabIndex={0}
                   style={styles.recipeCard}
                   onClick={() => {
-                    setToday(r);
-                    setShop(null);
+                    setTodayWithTransition(r);
                     setTab("today");
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setToday(r);
-                      setShop(null);
-                      setTab("today");
+                      setTodayWithTransition(r);
+                      setTab("today");  
                     }
                   }}
                 >
@@ -700,16 +714,16 @@ const filteredRecipes = recipes
                     tabIndex={0}
                     style={styles.recipeCard}
                     onClick={() => {
-                      setToday(r);
-                      setShop(null);
+                      setTodayWithTransition(r);
                       setTab("today");
+
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        setToday(r);
-                        setShop(null);
+                        setTodayWithTransition(r);
                         setTab("today");
+
                       }
                     }}
                   >
@@ -919,24 +933,77 @@ const filteredRecipes = recipes
           </section>
         )}
       </main>
+
+      <BottomNav tab={tab} setTab={setTab} t={t} />
+    </div>
+  );
+}
+function BottomNav({ tab, setTab, t }: any) {
+  const items: Array<{ key: Tab; label: string; icon: string }> = [
+    { key: "today", label: t.today, icon: "🍽️" },
+    { key: "recipes", label: t.recipes, icon: "📚" },
+    { key: "plan", label: t.plan, icon: "🗓️" },
+    { key: "shop", label: t.shop, icon: "🛒" },
+    { key: "pantry", label: t.pantry, icon: "🧺" },
+    { key: "settings", label: t.settings, icon: "⚙️" },
+  ];
+
+  return (
+    <div style={styles.bottomNavWrap}>
+      <div style={styles.bottomNav}>
+        {items.map((it) => {
+          const active = tab === it.key;
+          return (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => setTab(it.key)}
+              style={active ? styles.bottomNavItemActive : styles.bottomNavItem}
+              aria-label={it.label}
+            >
+            <div style={active ? styles.bottomNavIconActive : styles.bottomNavIcon}>{it.icon}</div>
+            <div style={active ? styles.bottomNavLabelActive : styles.bottomNavLabel}>{it.label}</div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function TabBtn({ active, onClick, children }: any) {
+function TodaySkeleton() {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        ...styles.tab,
-        ...(active ? styles.tabActive : {})
-      }}
-    >
-      {children}
-    </button>
+    <div>
+      <div style={styles.skelTitle} />
+      <div style={styles.skelLine} />
+      <div style={styles.skelLineShort} />
+
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <div style={styles.skelChip} />
+        <div style={styles.skelChip} />
+        <div style={styles.skelChip} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <div style={styles.skelBtn} />
+        <div style={styles.skelBtnPrimary} />
+      </div>
+
+      <hr style={styles.hr} />
+
+      <div style={styles.skelSection} />
+      <div style={styles.skelRow} />
+      <div style={styles.skelRow} />
+      <div style={styles.skelRow} />
+
+      <div style={{ marginTop: 14 }}>
+        <div style={styles.skelSection} />
+        <div style={styles.skelCard} />
+        <div style={styles.skelCard} />
+      </div>
+    </div>
   );
 }
-
 const styles: Record<string, React.CSSProperties> = {
   wrap: { minHeight: "100vh", background: "#f6f6f6", color: "#111" },
   header: {
@@ -966,7 +1033,7 @@ nav: {
   tab: { padding: "8px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", whiteSpace: "nowrap" },
   tabActive: { border: "1px solid #111", background: "#111", color: "#fff" },
   main: { padding: 12, display: "grid", placeItems: "start center" },
-  card: { width: "min(900px, 100%)", background: "#fff", border: "1px solid #eee", borderRadius: 16, padding: 14 },
+  card: { width: "min(900px, 100%)", background: "#ffffff", border: "1px solid #eee", borderRadius: 16, padding: 14 },
   h2: { margin: "4px 0 8px", fontSize: 18 },
   h3: { margin: "14px 0 6px", fontSize: 15 },
   p: { margin: "6px 0 10px", color: "#333" },
@@ -993,8 +1060,6 @@ nav: {
   input: { padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", width: 180 },
   checkRow: { display: "flex", alignItems: "center", gap: 8 },
   stepsGrid: {  display: "grid",  gap: 12,  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))"},
-  stepCard: {  border: "1px solid #eee",  borderRadius: 14,  padding: 12,  background: "#fff", minHeight: 110},
-  stepTitle: {  fontWeight: 800,  marginBottom: 8},
   stepText: {  lineHeight: 1.35,  color: "#222",  whiteSpace: "pre-wrap", fontSize: 14},
 searchRow: {
   display: "flex",
@@ -1226,5 +1291,323 @@ authBtnIcon: {
   display: "grid",
   placeItems: "center",
 },
+mainWithBottomNav: {
+  padding: 12,
+  display: "grid",
+  placeItems: "start center",
+  paddingBottom: 90, // espacio para bottom nav fijo
+},
 
+headerTopRow: {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+},
+
+headerSpacer: { height: 2 },
+
+// CTA row
+ctaRow: {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginTop: 10,
+},
+
+btnGhost: {
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid #ddd",
+  background: "#fff",
+  cursor: "pointer",
+},
+
+btnPrimaryWide: {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
+},
+
+// Ingredients
+sectionTitleRow: {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginTop: 12,
+},
+
+ingList: {
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: 6,
+},
+
+ingRow: {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "10px 10px",
+  borderRadius: 14,
+  border: "1px solid #f0f0f0",
+  background: "#fff",
+},
+
+ingLeft: { minWidth: 0, display: "grid", gap: 2 },
+ingName: { fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+ingHint: { fontSize: 12, color: "#777" },
+ingQty: { fontSize: 13, color: "#666", whiteSpace: "nowrap" },
+
+// Steps premium
+stepCard: {
+  border: "1px solid #eee",
+  borderRadius: 16,
+  padding: 12,
+  background: "#fff",
+  minHeight: 120,
+},
+
+stepHeader: {
+  display: "flex",
+  alignItems: "center",   // ✅ alinea verticalmente
+  gap: 10,
+  marginBottom: 10,
+},
+
+stepNum: {
+  width: 28,
+  height: 28,
+  borderRadius: 10,
+  border: "1px solid #eaeaea",
+  background: "#fafafa",
+  display: "flex",        // ✅ mejor control que grid
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 900,
+  fontSize: 13,
+  lineHeight: "28px",     // ✅ evita “bailes”
+  flex: "0 0 28px",
+},
+
+stepHeaderText: {
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  alignItems: "center",
+},
+
+stepTitle: {
+  fontWeight: 900,
+  lineHeight: 1.15
+},
+stepBody: {
+  lineHeight: 1.4,
+  color: "#222",
+  fontSize: 14,
+},
+cookedBarWrap: {
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: "calc(76px + env(safe-area-inset-bottom))", // ✅ justo encima del nav
+  zIndex: 40,
+  display: "grid",
+  placeItems: "center",
+  padding: "0 10px",
+  pointerEvents: "none",
+},
+
+cookedBarBtn: {
+  pointerEvents: "auto",
+  width: "min(520px, 100%)",
+  height: 42,                 // ✅ mucho menos grande
+  borderRadius: 999,
+  border: "1px solid #eee",
+  background: "rgba(255,255,255,0.92)",
+  backdropFilter: "blur(10px)",
+  color: "#111",
+  fontWeight: 800,
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  boxShadow: "0 12px 30px rgba(0,0,0,0.10)",
+},
+
+bottomNavWrap: {
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  padding: 8,
+  zIndex: 30,
+  background: "#fff",
+  borderTop: "1px solid #eee",
+},
+
+bottomNav: {
+  margin: "0 auto",
+  width: "min(900px, 100%)",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 4,
+},
+
+bottomNavItem: {
+  flex: 1,
+  border: "1px solid transparent",
+  background: "transparent",
+  borderRadius: 12,
+  padding: "8px 6px",
+  cursor: "pointer",
+  display: "grid",
+  placeItems: "center",
+  gap: 4,
+  color: "#444",
+},
+
+bottomNavItemActive: {
+  flex: 1,
+  border: "1px solid #ddd",
+  background: "#fafafa",
+  borderRadius: 12,
+  padding: "8px 6px",
+  cursor: "pointer",
+  display: "grid",
+  placeItems: "center",
+  gap: 4,
+  color: "#111",
+},
+
+bottomNavIcon: { fontSize: 16, lineHeight: 1 },
+bottomNavLabel: { fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" },
+
+headerBar: {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+},
+
+brand: {
+  fontWeight: 800,
+  letterSpacing: -0.3,
+},
+
+loginBtn: {
+  height: 34,
+  padding: "0 10px",         // ✅ vertical cero, centrado real
+  borderRadius: 10,
+  border: "1px solid #ddd",
+  background: "#fff",
+  cursor: "pointer",
+  fontWeight: 700,
+  display: "inline-flex",     // ✅
+  alignItems: "center",       // ✅
+  justifyContent: "center",   // ✅
+  lineHeight: 1,              // ✅
+},
+fadeIn: {
+  opacity: 1,
+  transform: "translateY(0px)",
+  transition: "opacity 180ms ease, transform 180ms ease",
+},
+
+fadeOut: {
+  opacity: 0,
+  transform: "translateY(6px)",
+  transition: "opacity 130ms ease, transform 130ms ease",
+},
+
+// Skeleton bits
+skelTitle: {
+  height: 20,
+  borderRadius: 10,
+  background: "#f0f0f0",
+  width: "70%",
+},
+skelLine: {
+  height: 12,
+  borderRadius: 10,
+  background: "#f0f0f0",
+  marginTop: 10,
+  width: "95%",
+},
+skelLineShort: {
+  height: 12,
+  borderRadius: 10,
+  background: "#f0f0f0",
+  marginTop: 8,
+  width: "75%",
+},
+skelChip: {
+  height: 26,
+  borderRadius: 999,
+  background: "#f0f0f0",
+  width: 72,
+},
+skelBtn: {
+  height: 40,
+  borderRadius: 12,
+  background: "#f0f0f0",
+  width: 120,
+},
+skelBtnPrimary: {
+  height: 40,
+  borderRadius: 12,
+  background: "#e9e9e9",
+  width: 170,
+  border: "1px solid #e5e5e5",
+},
+skelSection: {
+  height: 14,
+  borderRadius: 10,
+  background: "#f0f0f0",
+  width: 120,
+  marginTop: 6,
+},
+skelRow: {
+  height: 18,
+  borderRadius: 12,
+  background: "#f3f3f3",
+  marginTop: 10,
+},
+skelCard: {
+  height: 110,
+  borderRadius: 16,
+  background: "#f3f3f3",
+  marginTop: 10,
+},
+tipBox: {
+  position: "relative",
+  padding: "12px 12px 12px",
+  paddingTop: 14, // un pelín más de aire
+  borderRadius: 14,
+  border: "1px solid #eee",
+  background: "#fafafa",
+},
+tipText: { fontSize: 13, color: "#333" },
+endCta: {
+  display: "grid",
+  placeItems: "center",
+  paddingTop: 14,
+},
+
+endCtaBtn: {
+  padding: "10px 14px",
+  borderRadius: 999,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+},
 };

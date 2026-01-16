@@ -125,7 +125,7 @@ def is_numbers_only_line(s: str) -> bool:
 
 
 def bullets_by_sentence(text: str) -> str:
-    # mantiene sentido, y marca CONSEJO/RECUERDA como cursiva sin bullet
+    # mantiene sentido, y marca CONSEJO/RECUERDA/SABIAS QUE como cursiva sin bullet
     t = text.strip()
     t = re.sub(r"\s+", " ", t)
 
@@ -134,7 +134,7 @@ def bullets_by_sentence(text: str) -> str:
 
     if len(parts) <= 1:
         p = t.strip()
-        if p.upper().startswith(("CONSEJO:", "RECUERDA:", "TIP:", "NOTA:")):
+        if p.upper().startswith(("CONSEJO:", "RECUERDA:", "SABIAS QUE:", "TIP:", "NOTA:")):
             return f"_{p}_"
         return f"• {p}"
 
@@ -145,7 +145,7 @@ def bullets_by_sentence(text: str) -> str:
             p = p.lstrip("•").strip()
 
         up = p.upper()
-        if up.startswith(("CONSEJO:", "RECUERDA:", "TIP:", "NOTA:")):
+        if up.startswith(("CONSEJO:", "RECUERDA:","SABIAS QUE:", "TIP:", "NOTA:")):
             out.append(f"_{p}_")
         else:
             out.append(f"• {p}")

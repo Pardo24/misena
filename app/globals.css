@@ -1,3 +1,10 @@
+html, body {
+  padding: 0;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 .stepsGrid {
   display: grid;
   gap: 12px;
@@ -22,7 +29,4 @@
   white-space: pre-wrap;
 }
 
-html, body {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+
