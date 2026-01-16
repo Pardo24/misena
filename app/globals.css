@@ -21,3 +21,8 @@
   line-height: 1.35;
   white-space: pre-wrap;
 }
+
+html, body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

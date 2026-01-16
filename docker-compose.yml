@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    container_name: mise-db
     environment:
       POSTGRES_USER: mise
       POSTGRES_PASSWORD: mise
@@ -11,7 +12,7 @@ services:
       - mise_pg:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d mise"]
+      test: ["CMD-SHELL", "pg_isready -U mise -d mise"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -30,6 +31,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     env_file:
-      - .env.docker
+      - .env
+      
 volumes:
   mise_pg:

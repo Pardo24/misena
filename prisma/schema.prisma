@@ -6,20 +6,24 @@ datasource db {
   provider = "postgresql"
 }
 
+// -------- BASIC ITEMS ---------
+
 model QueueItem {
-  id        String   @id @default(cuid())
-  recipeId  String
-  position  Int
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  householdId String
+  recipeId    String
+  position    Int
+  createdAt   DateTime @default(now())
 
-  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  recipe    Recipe    @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
 
-  @@unique([recipeId])
-  @@index([position])
+  @@unique([householdId, recipeId])
+  @@index([householdId, position])
 }
 
 model Recipe {
-  id          String   @id
+  id          String  @id
   title       Json
   description Json
   mealType    String
@@ -27,13 +31,137 @@ model Recipe {
   costTier    Int
   difficulty  String
   tags        Json
-  active      Boolean  @default(true)
+  active      Boolean @default(true)
 
   ingredients Json
   steps       Json
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  queueItems  QueueItem[]  // 👈 añade esta línea
+  queueItems QueueItem[] // 👈 añade esta línea
+}
+
+model PantryItem {
+  id          String   @id @default(cuid())
+  householdId String
+  nameKey     String
+  alwaysHave  Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, nameKey])
+  @@index([householdId])
+}
+
+// ------------ HOUSEHOLD ----------------
+
+model Household {
+  id        String   @id @default(cuid())
+  name      String?
+  createdAt DateTime @default(now())
+
+  members     HouseholdMember[]
+  invites     HouseholdInvite[]
+  queue       QueueItem[]
+  pantryItems PantryItem[]
+}
+
+model HouseholdMember {
+  householdId String
+  userId      String
+  role        HouseholdRole @default(OWNER)
+  createdAt   DateTime      @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([householdId, userId])
+  @@index([userId])
+}
+
+enum HouseholdRole {
+  OWNER
+  MEMBER
+}
+
+model HouseholdInvite {
+  id          String       @id @default(cuid())
+  householdId String
+  email       String
+  tokenHash   String       @unique
+  status      InviteStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  invitedByUserId String
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("HouseholdInvitesSent", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([householdId])
+  @@index([email])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+// --------- AUTH --------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  passwordHash String? // ✅ para login normal (nullable para usuarios Google)
+
+  accounts Account[]
+  sessions Session[]
+
+  memberships          HouseholdMember[]
+  householdInvitesSent HouseholdInvite[] @relation("HouseholdInvitesSent")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }

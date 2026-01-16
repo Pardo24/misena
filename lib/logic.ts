@@ -52,49 +52,114 @@ export async function setPantryItem(nameKey: string, alwaysHave: boolean) {
   await db.pantry.put({ nameKey, alwaysHave: alwaysHave ? 1 : 0 });
 }
 
-export async function buildShoppingList(recipe: Recipe): Promise<ShoppingItem[]> {
-  const settings = await getSettings();
-  const lang = settings.lang;
-  const multiplier = settings.doublePortions ? 2 : 1; // base 2 -> compra 4
+
+function stripAccents(s: string) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+export function normalizeIngredientName(name: string) {
+  let s = stripAccents(name)
+    .toLowerCase()
+    .replace(/\*\*/g, "")
+    .replace(/[\(\[].*?[\)\]]/g, " ")   // (ver cantidad...) etc
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // 🔥 Reglas duras (colapsa variantes)
+  if (s.includes("agua")) return "agua";
+  if (s.includes("aceite")) return "aceite";
+  if (s.includes("sal")) return "sal";
+  if (s.includes("pimienta")) return "pimienta";
+  if (s.includes("mantequilla")) return "mantequilla";
+  if (s.includes("vinagre")) return "vinagre";
+
+  // Quita “para la salsa / para el arroz / ...” si te interesa generalizar otros
+  s = s.replace(/\bpara\b.*$/, "").trim();
+
+  // Quita artículos sueltos al final
+  s = s.replace(/\b(el|la|los|las|de|del|al)\b/g, " ").replace(/\s+/g, " ").trim();
+
+  return s;
+}
+
+export const ALWAYS_IGNORE = new Set([
+  "agua", "aceite", "sal", "pimienta", "mantequilla", "vinagre",
+]);
+
+export async function buildShoppingListForMany(recipes: Recipe[], settings: any) {
   const pantrySet = await getPantrySet();
+  const map = new Map<string, ShoppingItem>();
+
+  for (const r of recipes) {
+    const items = await buildShoppingList(r, settings, pantrySet);
+
+    for (const it of items) {
+      const prev = map.get(it.key);
+      if (!prev) map.set(it.key, { ...it, checked: false });
+      else {
+        if (prev.qty != null && it.qty != null) prev.qty += it.qty;
+        // qtyText: por simplicidad, dejamos el primero
+      }
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+
+export function toIdSet(queue: { recipeId: string }[]) {
+  return new Set(queue.map(q => q.recipeId).filter(Boolean));
+}
+
+
+export async function buildShoppingList(
+  recipe: Recipe,
+  settingsOverride?: Awaited<ReturnType<typeof getSettings>>,
+  pantryOverride?: Set<string>
+): Promise<ShoppingItem[]> {
+  const settings = settingsOverride ?? (await getSettings());
+  const pantrySet = pantryOverride ?? (await getPantrySet());
+  const lang = settings.lang;
+  const multiplier = settings.doublePortions ? 2 : 1;
 
   const map = new Map<string, ShoppingItem>();
 
-  for (const ing of recipe.ingredients) {
-    const name = ing.name?.[lang] || ing.name?.es || "";
-    const nameKey = normalize(ing.name?.es || name);
+  for (const ing of recipe.ingredients as any[]) {
+    const displayName = (ing.name?.[lang] || ing.name?.es || "").trim();
+    if (!displayName) continue;
 
-    const isPantry = !!ing.pantry || pantrySet.has(nameKey);
+    const baseKey = normalizeIngredientName(displayName);
+    if (ALWAYS_IGNORE.has(baseKey)) continue;
+
+    const isPantry = !!ing.pantry || pantrySet.has(baseKey);
     if (isPantry) continue;
 
-    // --- HelloFresh: preferimos qty2Text/qty4Text (texto) ---
     const hfQtyText = settings.doublePortions ? ing.qty4Text : ing.qty2Text;
+
     if (hfQtyText) {
-      const key = `${normalize(name)}|${hfQtyText}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          name,
+      if (!map.has(baseKey)) {
+        map.set(baseKey, {
+          key: baseKey,
+          name: displayName,
           qtyText: hfQtyText,
           category: ing.category ?? "unknown",
           checked: false,
-        });
+        } as any);
       }
       continue;
     }
 
-    // --- Legacy: qty numérico ---
     const qty = (ing.qty ?? 0) * multiplier;
-    const unit = ing.unit ?? "";
-    const key = `${normalize(name)}|${unit}`;
+    const unit = (ing.unit ?? "").trim();
+    if (!qty) continue;
 
-    const prev = map.get(key);
+    const prev = map.get(baseKey);
     if (prev) {
-      prev.qty = (prev.qty ?? 0) + qty;
+      if (prev.qty != null) prev.qty = (prev.qty ?? 0) + qty;
     } else {
-      map.set(key, {
-        key,
-        name,
+      map.set(baseKey, {
+        key: baseKey,
+        name: displayName,
         qty,
         unit,
         category: ing.category ?? "unknown",

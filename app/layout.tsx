@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import "./globals.css";
 import { Inter } from "next/font/google";
+import { Providers } from "./providers";
 
 const inter = Inter({ subsets: ["latin"] });
 const geistSans = Geist({
@@ -28,7 +29,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        {children}
+        <Providers>{children}</Providers>
         <ServiceWorkerRegister />
       </body>
 

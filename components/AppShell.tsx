@@ -3,10 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/db";
 import type { Lang, Mode, Recipe, ShoppingItem } from "@/lib/types";
-import { buildShoppingList, getSettings, markCooked, pickTodayRecipeFromList, setPantryItem, updateSettings } from "@/lib/logic";
+import { buildShoppingList,buildShoppingListForMany, getSettings, markCooked, pickTodayRecipeFromList, setPantryItem, updateSettings } from "@/lib/logic";
 import { ImportHelloFreshPdf } from "@/components/ImportHelloFreshPdf";
+import { signIn, signOut, useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
-type Tab = "today" | "recipes" | "shop" | "pantry" | "settings";
+type Tab = "today" | "recipes" | "shop" | "plan" | "pantry" | "settings";
 
 export function AppShell() {
   const [tab, setTab] = useState<Tab>("today");
@@ -25,6 +28,30 @@ export function AppShell() {
  
   const [queue, setQueue] = useState<any[]>([]);
 
+  const { data: session } = useSession();
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // mobile responsive (sin CSS media queries)
+  const [isNarrow, setIsNarrow] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 420);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    const qtab = searchParams.get("tab") as any;
+    const allowed = new Set(["today", "recipes", "shop", "plan", "pantry", "settings"]);
+    if (qtab && allowed.has(qtab)) {
+      setTab(qtab);
+    }
+    // solo al montar / cuando cambie la query
+  }, [searchParams]);
+
   async function loadRecipesFromServer(): Promise<Recipe[]> {
     const res = await fetch("/api/recipes", { cache: "no-store" });
     if (!res.ok) throw new Error("No se pudieron cargar recetas");
@@ -36,10 +63,23 @@ export function AppShell() {
   await loadRecipesFromServer();
 };
 
-  useEffect(() => {
+async function isLoggedIn(): Promise<boolean> {
+  const r = await fetch("/api/me", { cache: "no-store" });
+  if (!r.ok) return false;
+  const data = await r.json();
+  return !!data.loggedIn;
+}
+
+ useEffect(() => {
   (async () => {
     const s = await getSettings(); // Dexie OK
     setSettings(s);
+
+    // ✅ carga cola + despensa al inicio (para que Recipes marque ✓ al entrar)
+    await loadQueue();
+
+    const p = await db.pantry.toArray();
+    setPantryList(p.map(x => ({ nameKey: x.nameKey, alwaysHave: !!x.alwaysHave })));
 
     const serverRecipes = await loadRecipesFromServer(); // ✅ una sola vez
 
@@ -81,6 +121,7 @@ export function AppShell() {
       es: {
         today: "Hoy",
         recipes: "Recetas",
+        plan: "Plan",
         shop: "Compra",
         pantry: "Despensa",
         settings: "Ajustes",
@@ -100,6 +141,7 @@ export function AppShell() {
       ca: {
         today: "Avui",
         recipes: "Receptes",
+        plan: "Pla",
         shop: "Compra",
         pantry: "Rebost",
         settings: "Ajustos",
@@ -131,10 +173,35 @@ export function AppShell() {
   setToday(next);
 }
 
-  async function loadQueue() {
+const queueIdSet = useMemo(() => {
+  return new Set(queue.map((q: any) => q.recipeId).filter(Boolean));
+}, [queue]);
+
+
+async function loadQueue() {
+  const logged = await isLoggedIn();
+
+  if (!logged) {
+    // TODO: cargar de Dexie/local si quieres persistencia local,
+    // o simplemente dejar queue en memoria si te basta.
+    setQueue([]);
+    return;
+  }
+
   const res = await fetch("/api/queue", { cache: "no-store" });
+  if (!res.ok) {
+    setQueue([]);
+    return;
+  }
   setQueue(await res.json());
 }
+
+useEffect(() => {
+  if (tab === "recipes" || tab === "plan") {
+    loadQueue().catch(console.error);
+  }
+}, [tab]);
+
 
 function RichText({ text }: { text: string }) {
   // interpreta **bold** y _italic_
@@ -187,21 +254,95 @@ function renderStepBody(bodyLines: string[]) {
   );
 }
 
-async function toggleQueue(recipeId: string) {
-  const inQueue = queue.some((q) => q.recipeId === recipeId);
+async function moveQueue(recipeId: string, dir: "up" | "down") {
+  const res = await fetch("/api/queue/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recipeId, dir }),
+  });
 
-    if (inQueue) {
-      await fetch(`/api/queue?recipeId=${encodeURIComponent(recipeId)}`, { method: "DELETE" });
-    } else {
-      await fetch("/api/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recipeId }),
-      });
-    }
+  if (!res.ok) {
+    console.error("Queue reorder failed", res.status, await res.text());
+    return;
+  }
 
-    await loadQueue();
+  await loadQueue();
 }
+
+function qtyForSettings(ing: any, settings: any) {
+  // HF: preferimos texto 2P/4P
+  return settings.doublePortions ? ing.qty4Text : ing.qty2Text;
+}
+
+async function generateWeeklyShop() {
+  const list = queue
+    .map((q: any) => q.recipe)
+    .filter((r: any) => r && r.id) // asegúrate de que es receta
+    .filter(
+      (r: any, i: number, arr: any[]) =>
+        arr.findIndex((x) => x.id === r.id) === i
+    ) 
+
+  if (list.length === 0) return;
+
+  const weekly = await buildShoppingListForMany(list, settings);
+  setShop(weekly);
+  setTab("shop");
+}
+
+
+function normalizeName(s: string) {
+  return s.trim().toLowerCase();
+}
+
+// intenta sumar cantidades simples (g/ml/u/cdta) si se puede; si no, deja texto
+function parseQtyText(q: string) {
+  const t = String(q || "").trim().toLowerCase().replace(",", ".");
+  if (!t) return null;
+
+  const half = t.startsWith("½") ? 0.5 : null;
+  const m = t.match(/^(\d+(?:\.\d+)?)\s*([a-záéíóúñ]+)?/);
+
+  const num = half ?? (m ? Number(m[1]) : NaN);
+  if (!Number.isFinite(num)) return null;
+
+  const unitRaw = (m?.[2] || "").toLowerCase();
+  const unit =
+    unitRaw.startsWith("g") || unitRaw.includes("gram") ? "g" :
+    unitRaw === "ml" || unitRaw === "m" ? "ml" :
+    unitRaw.includes("cuchar") || unitRaw.includes("cdta") ? "cdta" :
+    unitRaw.includes("unidad") || unitRaw.includes("u") || unitRaw.includes("sobre") ? "u" :
+    unitRaw || "";
+
+  return { num, unit };
+}
+
+async function toggleQueue(recipeId: string) {
+
+  const logged = await isLoggedIn();
+
+   if (!logged) {
+    return;
+  }
+  const inQueue = queue.some((q: any) => q.recipeId === recipeId);
+
+  const res = await fetch(
+    inQueue ? `/api/queue?recipeId=${encodeURIComponent(recipeId)}` : "/api/queue",
+    {
+      method: inQueue ? "DELETE" : "POST",
+      headers: inQueue ? undefined : { "Content-Type": "application/json" },
+      body: inQueue ? undefined : JSON.stringify({ recipeId }),
+    }
+  );
+
+  if (!res.ok) {
+    console.error("Queue API failed", res.status, await res.text());
+    return;
+  }
+
+  await loadQueue();
+}
+
 
   async function pickFromQueue() {
     if (!queue.length) return;
@@ -295,16 +436,52 @@ const filteredRecipes = recipes
 
   return (
     <div style={styles.wrap}>
-      <header style={styles.header}>
-        <div style={styles.title}>🍽️ Cenas</div>
-        <nav style={styles.nav}>
-          <TabBtn active={tab === "today"} onClick={() => setTab("today")}>{t.today}</TabBtn>
-          <TabBtn active={tab === "recipes"} onClick={() => setTab("recipes")}>{t.recipes}</TabBtn>
-          <TabBtn active={tab === "shop"} onClick={() => setTab("shop")}>{t.shop}</TabBtn>
-          <TabBtn active={tab === "pantry"} onClick={() => setTab("pantry")}>{t.pantry}</TabBtn>
-          <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>{t.settings}</TabBtn>
-        </nav>
-      </header>
+        <header style={styles.header}>
+          <div style={styles.headerRow}>
+            <nav style={styles.nav}>
+              <TabBtn active={tab === "today"} onClick={() => setTab("today")}>{t.today}</TabBtn>
+              <TabBtn active={tab === "recipes"} onClick={() => setTab("recipes")}>{t.recipes}</TabBtn>
+              <TabBtn active={tab === "plan"} onClick={() => setTab("plan")}>{t.plan}</TabBtn>
+              <TabBtn active={tab === "shop"} onClick={() => setTab("shop")}>{t.shop}</TabBtn>
+              <TabBtn active={tab === "pantry"} onClick={() => setTab("pantry")}>{t.pantry}</TabBtn>
+              <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>{t.settings}</TabBtn>
+            </nav>
+
+            {!session ? (
+              <button
+                type="button"
+                style={styles.authTab}
+                onClick={() => {
+                  sessionStorage.setItem("mise:returnTab", tab);
+                  router.push("/auth?mode=login");
+                }}
+
+                aria-label="Entrar"
+                title="Entrar"
+              >
+                <span style={styles.authTabIcon}>🔒</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                style={styles.authTab}
+                onClick={() => signOut({ callbackUrl: "/" })}
+                aria-label="Salir"
+                title="Salir"
+              >
+                {session.user?.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={session.user.image} alt="" style={styles.authAvatar} />
+                ) : (
+                  <span style={styles.authTabIcon}>
+                    {String(session.user?.name || session.user?.email || "U").trim().slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+        </header>
+
 
       <main style={styles.main}>
         {tab === "today" && (
@@ -384,7 +561,6 @@ const filteredRecipes = recipes
         {tab === "recipes" && (
           <section style={styles.card}>
             <h2 style={styles.h2}>{t.recipes}</h2>
-
           <ImportHelloFreshPdf onDone={reloadRecipes} />
             <div style={styles.searchRow}>
             <input
@@ -398,88 +574,40 @@ const filteredRecipes = recipes
                 ✕
               </button>
             )}
-           {queue.length > 0 && (
-              <div style={styles.queueBar}>
-                <div style={{ fontWeight: 700 }}>Cola ({queue.length})</div>
-
-                <div style={styles.queueChips}>
-                  {queue
-                    .map((q) => q.recipe)        // q incluye recipe porque el GET hace include: { recipe: true }
-                    .filter(Boolean)
-                    .map((r: any) => (
-                      <button
-                        key={r.id}
-                        type="button"
-                        style={styles.chip}
-                        onClick={() => {
-                          setToday(r);
-                          setShop(null);
-                          setTab("today");
-                        }}
-                      >
-                        {r.title?.[lang] || r.title?.es}
-                      </button>
-                    ))}
-                </div>
-
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" style={styles.btnSmallPrimary} onClick={pickFromQueue}>
-                    Cocinar siguiente
-                  </button>
-
-                  <button
-                    type="button"
-                    style={styles.btnSmall}
-                    onClick={async () => {
-                      // vacía la cola en servidor (una a una, simple)
-                      await Promise.all(
-                        queue.map((q: any) =>
-                          fetch(`/api/queue?recipeId=${encodeURIComponent(q.recipeId)}`, { method: "DELETE" })
-                        )
-                      );
-                      await loadQueue();
-                    }}
-                  >
-                    Vaciar
-                  </button>
-                </div>
-              </div>
-            )}
+           <button type="button" style={styles.btnSmall} onClick={() => setTab("plan")}>
+              Ver lista ({queue.length})
+            </button>
+            
 
           </div>
             <div style={styles.grid}>
             {filteredRecipes.map((r) => {
-              const inQueue = queue.some(q => q.recipeId === r.id);
+              const inQueue = queueIdSet.has(r.id);
               return (
-                <button
+                <div
                   key={r.id}
+                  role="button"
+                  tabIndex={0}
                   style={styles.recipeCard}
                   onClick={() => {
                     setToday(r);
                     setShop(null);
                     setTab("today");
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setToday(r);
+                      setShop(null);
+                      setTab("today");
+                    }
+                  }}
                 >
                   <div style={styles.recipeTopRow}>
                     <div style={styles.recipeTitle}>{r.title?.[lang] || r.title?.es}</div>
 
                     <div style={styles.recipeIcons}>
-                      {/* Poner como Hoy */}
-                      <button
-                        type="button"
-                        title="Poner como receta de hoy"
-                        style={styles.iconBtn}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setToday(r);
-                          setShop(null);
-                          setTab("today");
-                        }}
-                      >
-                        ☀️
-                      </button>
-
-                      {/* Cola */}
+                     
                       <button
                         type="button"
                         title={inQueue ? "Quitar de la cola" : "Añadir a la cola"}
@@ -500,7 +628,8 @@ const filteredRecipes = recipes
                   </div>
 
                   <div style={styles.recipeDesc}>{r.description?.[lang] || r.description?.es}</div>
-                </button>
+                </div>
+
               );
             })}
           </div>
@@ -508,46 +637,187 @@ const filteredRecipes = recipes
             <p style={styles.mutedP}>Tip: toca una receta para ponerla como “Hoy”.</p>
           </section>
         )}
-
-        {tab === "shop" && (
+        {tab === "plan" && (
           <section style={styles.card}>
-            <h2 style={styles.h2}>{t.shop}</h2>
-            {!shop ? (
-              <div style={styles.mutedP}>Genera la lista desde “Hoy”.</div>
-            ) : (
-              <>
-                <div style={styles.mutedP}>
-                  Consolidado. {settings.doublePortions ? "Incluye raciones dobles (x2)." : ""}
-                </div>
-                <ul style={styles.ul}>
-                  {shop.map(item => (
-                    <li key={item.key} style={styles.li}>
-                      <label style={styles.checkRow}>
-                        <input
-                          type="checkbox"
-                          checked={item.checked}
-                          onChange={() => {
-                            setShop(prev => prev ? prev.map(x => x.key === item.key ? { ...x, checked: !x.checked } : x) : prev);
-                          }}
-                        />
-                        <span style={{ textDecoration: item.checked ? "line-through" : "none" }}>
-                          {item.name}
-                        </span>
-                      </label>
-                      <span style={styles.muted}>
-                        {item.qtyText
-                          ? item.qtyText
-                          : item.qty != null
-                            ? `${Math.round(item.qty * 100) / 100} ${item.unit ?? ""}`.trim()
-                            : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
+            <h2 style={styles.h2}>Lista</h2>
+
+            <div style={styles.searchRow}>
+              <input
+                value={recipeQuery}
+                onChange={(e) => setRecipeQuery(e.target.value)}
+                placeholder="Filtrar en la lista…"
+                style={styles.searchInput}
+              />
+              {recipeQuery && (
+                <button type="button" style={styles.searchClear} onClick={() => setRecipeQuery("")}>
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={styles.btnSmallPrimary}
+                onClick={async () => {
+                  await generateWeeklyShop(); // genera shop desde cola (máx 7)
+                  setTab("shop"); // opcional: te lleva directo a la lista
+                }}
+              >
+                Lista compra semanal
+              </button>
+
+              <button
+                type="button"
+                style={styles.btnSmall}
+                onClick={async () => {
+                  await fetch("/api/queue/clear", { method: "POST" });
+                  await loadQueue();
+                }}
+              >
+                Vaciar lista
+              </button>
+            </div>
+
+
+            <div style={styles.grid}>
+              {queue
+                .map((q: any) => q.recipe)
+                .filter(Boolean)
+                .filter((r: any) => {
+                  const qx = recipeQuery.trim().toLowerCase();
+                  if (!qx) return true;
+                  const title = String(r.title?.[lang] || r.title?.es || "").toLowerCase();
+                  const ing = Array.isArray(r.ingredients)
+                    ? r.ingredients.map((i: any) => String(i?.name?.[lang] || i?.name?.es || "").toLowerCase()).join(" ")
+                    : "";
+                  return title.includes(qx) || ing.includes(qx);
+                })
+                .map((r: any) => (
+                  <div
+                    key={r.id}
+                    role="button"
+                    tabIndex={0}
+                    style={styles.recipeCard}
+                    onClick={() => {
+                      setToday(r);
+                      setShop(null);
+                      setTab("today");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setToday(r);
+                        setShop(null);
+                        setTab("today");
+                      }
+                    }}
+                  >
+                    <div style={styles.recipeTopRow}>
+                      <div style={styles.recipeTitle}>{r.title?.[lang] || r.title?.es}</div>
+
+                     <div style={styles.recipeIcons}>
+                    <button
+                      type="button"
+                      title="Subir"
+                      style={styles.iconBtn}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await moveQueue(r.id, "up");
+                      }}
+                    >
+                      ↑
+                    </button>
+
+                    <button
+                      type="button"
+                      title="Bajar"
+                      style={styles.iconBtn}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await moveQueue(r.id, "down");
+                      }}
+                    >
+                      ↓
+                    </button>
+
+                    <button
+                      type="button"
+                      title="Quitar de la lista"
+                      style={styles.iconBtn}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await fetch(`/api/queue?recipeId=${encodeURIComponent(r.id)}`, { method: "DELETE" });
+                        await loadQueue();
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                    </div>
+
+                    <div style={styles.metaRow}>
+                      <span style={styles.badgeSmall}>⏱️ {r.timeMin}</span>
+                      <span style={styles.badgeSmall}>💸 {"€".repeat(r.costTier)}</span>
+                    </div>
+                  </div>
+                ))
+                }
+            </div>
           </section>
         )}
+
+       {tab === "shop" && (
+        <section style={styles.card}>
+          <h2 style={styles.h2}>{t.shop}</h2>
+
+          {!shop ? (
+            <div style={styles.mutedP}>
+              Genera la lista desde “Hoy” o desde “Plan”.
+            </div>
+          ) : (
+            <>
+              <div style={styles.mutedP}>
+                Consolidado. {settings.doublePortions ? "Incluye raciones dobles (x2)." : ""}
+              </div>
+
+              <ul style={styles.ul}>
+                {shop.map((item) => (
+                  <li key={item.key} style={styles.li}>
+                    <label style={styles.checkRow}>
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        onChange={() => {
+                          setShop((prev) =>
+                            prev
+                              ? prev.map((x) =>
+                                  x.key === item.key ? { ...x, checked: !x.checked } : x
+                                )
+                              : prev
+                          );
+                        }}
+                      />
+                      <span style={{ textDecoration: item.checked ? "line-through" : "none" }}>
+                        {item.name}
+                      </span>
+                    </label>
+
+                    <span style={styles.muted}>
+                      {item.qtyText
+                        ? item.qtyText
+                        : item.qty != null
+                          ? `${Math.round(item.qty * 100) / 100} ${item.unit ?? ""}`.trim()
+                          : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      )}
 
         {tab === "pantry" && (
           <section style={styles.card}>
@@ -669,9 +939,30 @@ function TabBtn({ active, onClick, children }: any) {
 
 const styles: Record<string, React.CSSProperties> = {
   wrap: { minHeight: "100vh", background: "#f6f6f6", color: "#111" },
-  header: { padding: 12, position: "sticky", top: 0, background: "#fff", borderBottom: "1px solid #eee", zIndex: 10 },
+  header: {
+  padding: 12,
+  position: "sticky",
+  top: 0,
+  background: "#fff",
+  borderBottom: "1px solid #eee",
+  zIndex: 10,
+},
+
+headerRow: {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+},
+
+nav: {
+  display: "flex",
+  gap: 8,
+  overflowX: "auto",
+  flex: 1,
+  minWidth: 0,
+  paddingBottom: 2, // evita que el scroll tape bordes
+},
   title: { fontWeight: 800, fontSize: 18, marginBottom: 10 },
-  nav: { display: "flex", gap: 8, overflowX: "auto" },
   tab: { padding: "8px 10px", borderRadius: 10, border: "1px solid #ddd", background: "#fff", whiteSpace: "nowrap" },
   tabActive: { border: "1px solid #111", background: "#111", color: "#fff" },
   main: { padding: 12, display: "grid", placeItems: "start center" },
@@ -726,6 +1017,35 @@ searchClear: {
   border: "1px solid #ddd",
   background: "#fff",
   cursor: "pointer",
+},
+authTab: {
+  padding: "8px 10px",      // igual que tab
+  borderRadius: 10,         // igual que tab
+  border: "1px solid #ddd", // igual que tab
+  background: "#fff",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: 34,               // mismo look que tabs
+  minWidth: 36,             // compacto
+},
+
+authTabIcon: {
+  fontSize: 14,             // icono más pequeño
+  lineHeight: 1,
+  display: "inline-block",
+  transform: "translateY(0.5px)", // micro ajuste visual
+},
+
+authAvatar: {
+  width: 18,
+  height: 18,
+  borderRadius: 6,
+  objectFit: "cover",
+  border: "1px solid #eee",
+  display: "block",
 },
 
 queueBar: {
@@ -790,6 +1110,121 @@ iconBtnActive: {
   background: "#111",
   color: "#fff",
   cursor: "pointer",
+},
+headerTop: {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  marginBottom: 10,
+},
+
+authBtnPrimary: {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+},
+
+authIcon: {
+  width: 26,
+  height: 26,
+  borderRadius: 10,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(255,255,255,0.15)",
+},
+
+userChip: {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "6px 8px",
+  borderRadius: 16,
+  border: "1px solid #eee",
+  background: "#fafafa",
+  maxWidth: "62%",
+},
+
+userLeft: {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+  flex: 1,
+},
+
+avatar: {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  objectFit: "cover",
+  border: "1px solid #eaeaea",
+  background: "#fff",
+},
+
+avatarFallback: {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  border: "1px solid #eaeaea",
+  background: "#fff",
+  fontWeight: 900,
+},
+
+userMeta: {
+  display: "grid",
+  gap: 2,
+  minWidth: 0,
+},
+
+userName: {
+  fontSize: 13,
+  fontWeight: 900,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+},
+
+userSub: {
+  fontSize: 12,
+  color: "#666",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+},
+
+authBtnGhost: {
+  padding: "8px 10px",
+  borderRadius: 12,
+  border: "1px solid #e5e5e5",
+  background: "#fff",
+  color: "#111",
+  fontWeight: 800,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+},
+
+authBtnIcon: {
+  width: 38,
+  height: 38,
+  borderRadius: 14,
+  border: "1px solid #e5e5e5",
+  background: "#fff",
+  color: "#111",
+  fontWeight: 900,
+  cursor: "pointer",
+  display: "grid",
+  placeItems: "center",
 },
 
 };
