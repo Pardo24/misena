@@ -31,6 +31,12 @@ export type Recipe = {
   tags: string[];
   steps: Record<Lang, string[]>;
   ingredients: Ingredient[];
+  imageUrl?: string;
+  stepImages?: string[];
+  nutrition?: { calories?: number; fat?: number; protein?: number; carbs?: number; fiber?: number };
+  allergens?: string[];
+  source?: string;
+  sourceId?: string;
   active: 0 | 1;
 };
 

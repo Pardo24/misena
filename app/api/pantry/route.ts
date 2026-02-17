@@ -1,42 +1,77 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-import { getActiveHouseholdId } from "@/lib/server/household";
+import { requireUser, getActiveHouseholdId } from "@/lib/server/household";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  const userId = (session?.user as any)?.id;
-  if (!userId) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  try {
+    const { userId } = await requireUser();
+    const householdId = await getActiveHouseholdId(userId);
 
-  const householdId = await getActiveHouseholdId(userId);
+    const items = await prisma.pantryItem.findMany({
+      where: { householdId },
+      orderBy: { nameKey: "asc" },
+    });
 
-  const items = await prisma.pantryItem.findMany({
-    where: { householdId },
-    orderBy: { nameKey: "asc" },
-  });
-
-  return NextResponse.json(items);
+    return NextResponse.json(items);
+  } catch {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  const userId = (session?.user as any)?.id;
-  if (!userId) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  try {
+    const { userId } = await requireUser();
+    const householdId = await getActiveHouseholdId(userId);
 
-  const householdId = await getActiveHouseholdId(userId);
+    const body = await req.json().catch(() => ({}));
+    const nameKey = String(body?.nameKey ?? "").trim().toLowerCase();
+    if (!nameKey) return NextResponse.json({ error: "nameKey required" }, { status: 400 });
 
-  const { nameKey, alwaysHave } = await req.json();
-  const key = String(nameKey || "").trim().toLowerCase();
-  if (!key) return NextResponse.json({ error: "nameKey required" }, { status: 400 });
+    const alwaysHave = body?.alwaysHave != null ? !!body.alwaysHave : undefined;
 
-  await prisma.pantryItem.upsert({
-    where: { householdId_nameKey: { householdId, nameKey: key } },
-    update: { alwaysHave: alwaysHave ?? true },
-    create: { householdId, nameKey: key, alwaysHave: alwaysHave ?? true },
-  });
+    const qtyRaw = body?.qty;
+    const qty =
+      qtyRaw === "" || qtyRaw == null || Number.isNaN(Number(qtyRaw)) ? null : Number(qtyRaw);
 
-  return NextResponse.json({ ok: true });
+    const unitRaw = body?.unit;
+    const unit = unitRaw == null ? null : String(unitRaw).trim().toLowerCase() || null;
+
+    await prisma.pantryItem.upsert({
+      where: { householdId_nameKey: { householdId, nameKey } },
+      update: {
+        ...(alwaysHave !== undefined ? { alwaysHave } : {}),
+        qty,
+        unit,
+      },
+      create: {
+        householdId,
+        nameKey,
+        alwaysHave: alwaysHave ?? false,
+        qty,
+        unit,
+      },
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const { userId } = await requireUser();
+    const householdId = await getActiveHouseholdId(userId);
+
+    const { searchParams } = new URL(req.url);
+    const nameKey = String(searchParams.get("nameKey") || "").trim().toLowerCase();
+    if (!nameKey) return NextResponse.json({ error: "nameKey required" }, { status: 400 });
+
+    await prisma.pantryItem.deleteMany({ where: { householdId, nameKey } });
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
 }

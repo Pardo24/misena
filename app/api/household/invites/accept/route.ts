@@ -26,10 +26,13 @@ export async function POST(req: Request) {
     if (invite.status !== "PENDING") return NextResponse.json({ error: "not pending" }, { status: 400 });
     if (invite.expiresAt.getTime() < Date.now()) return NextResponse.json({ error: "expired" }, { status: 400 });
 
-    // Asegura que el email coincide con el usuario logueado
-    const userEmail = (session.user?.email || "").toLowerCase();
-    if (!userEmail || userEmail !== invite.email) {
-      return NextResponse.json({ error: "email mismatch" }, { status: 403 });
+    // If invite has an email, verify it matches the logged-in user
+    // If invite email is empty, it's a shareable link — anyone can accept
+    if (invite.email) {
+      const userEmail = (session.user?.email || "").toLowerCase();
+      if (!userEmail || userEmail !== invite.email.toLowerCase()) {
+        return NextResponse.json({ error: "email mismatch" }, { status: 403 });
+      }
     }
 
     await prisma.$transaction([

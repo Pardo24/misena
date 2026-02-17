@@ -9,24 +9,23 @@ export async function requireUser() {
   return { userId, session };
 }
 
-// Devuelve el household “activo” del usuario.
-// (Para simplificar: el primero. Luego puedes guardar defaultHouseholdId en User.)
+// lib/server/household.ts
 export async function getActiveHouseholdId(userId: string) {
-  const m = await prisma.householdMember.findFirst({
+  const memberships = await prisma.householdMember.findMany({
     where: { userId },
-    orderBy: { createdAt: "asc" },
     select: { householdId: true },
   });
-  if (m) return m.householdId;
+  if (!memberships.length) throw new Error("NO_HOUSEHOLD");
 
-  // Si por lo que sea no tiene, creamos uno
-  const created = await prisma.household.create({
-    data: {
-      members: {
-        create: { userId, role: "OWNER" },
-      },
-    },
-    select: { id: true },
+  // Coge el household con más miembros
+  const householdIds = memberships.map(m => m.householdId);
+
+  const counts = await prisma.householdMember.groupBy({
+    by: ["householdId"],
+    where: { householdId: { in: householdIds } },
+    _count: { userId: true },
   });
-  return created.id;
+
+  counts.sort((a, b) => (b._count.userId ?? 0) - (a._count.userId ?? 0));
+  return counts[0].householdId;
 }

@@ -35,23 +35,70 @@ model Recipe {
 
   ingredients Json
   steps       Json
+  imageUrl    String?
+  stepImages  Json?
+  nutrition   Json?
+  allergens   Json?
+  source      String?
+  sourceId    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   queueItems QueueItem[] // 👈 añade esta línea
+  favorites  Favorite[]
 }
 
 model PantryItem {
   id          String   @id @default(cuid())
   householdId String
   nameKey     String
-  alwaysHave  Boolean  @default(true)
+
+  // Inventario real
+  qty         Float?      // null = sin control de cantidad (pero existe)
+  unit        String?     // "g", "ml", "u", etc.
+  updatedAt   DateTime @updatedAt
+
+  // Básicos (siempre excluir de compra)
+  alwaysHave  Boolean  @default(false)
+
   createdAt   DateTime @default(now())
 
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
 
   @@unique([householdId, nameKey])
+  @@index([householdId])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  recipeId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recipeId])
+  @@index([userId])
+}
+
+model ShoppingListItem {
+  id          String   @id @default(cuid())
+  householdId String
+  key         String
+  name        String
+  qty         Float?
+  unit        String?
+  qtyText     String?
+  category    String?
+  checked     Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, key])
   @@index([householdId])
 }
 
@@ -62,10 +109,11 @@ model Household {
   name      String?
   createdAt DateTime @default(now())
 
-  members     HouseholdMember[]
-  invites     HouseholdInvite[]
-  queue       QueueItem[]
-  pantryItems PantryItem[]
+  members       HouseholdMember[]
+  invites       HouseholdInvite[]
+  queue         QueueItem[]
+  pantryItems   PantryItem[]
+  shoppingItems ShoppingListItem[]
 }
 
 model HouseholdMember {
@@ -128,6 +176,7 @@ model User {
 
   memberships          HouseholdMember[]
   householdInvitesSent HouseholdInvite[] @relation("HouseholdInvitesSent")
+  favorites            Favorite[]
 }
 
 model Account {

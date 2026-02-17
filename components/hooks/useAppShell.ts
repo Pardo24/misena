@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/lib/db";
 import type { Lang, Mode, Recipe, ShoppingItem } from "@/lib/types";
 import {
@@ -13,7 +13,7 @@ import {
   updateSettings,
 } from "@/lib/logic";
 import { useSession } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { Tab, PantryRow } from "@/components/appShellStyles";
 
 export function useAppShell() {
@@ -38,12 +38,7 @@ export function useAppShell() {
   const [pantry, setPantry] = useState<PantryRow[] | null>(null);
   const [cookedSummary, setCookedSummary] = useState<{ name: string; qty: string }[] | null>(null);
   const [pantryNewName, setPantryNewName] = useState("");
-  const router = useRouter();
   const { data: session, status } = useSession();
-
-  useEffect(() => {
-    if (status === "authenticated") router.refresh();
-  }, [status, router]);
 
   const searchParams = useSearchParams();
 
@@ -85,12 +80,18 @@ export function useAppShell() {
       setToday(todayRecipe);
       setTodayLoading(false);
       setTodayFadeIn(true);
+      initialTodaySet.current = true;
       setReady(true);
     })().catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Track whether initial load has set today already
+  const initialTodaySet = useRef(false);
+
   useEffect(() => {
+    // Skip if initial load hasn't happened yet, or if recipes aren't loaded
+    if (!initialTodaySet.current) return;
     if (!settings) return;
     if (!recipes || recipes.length === 0) return;
     (async () => {
@@ -106,7 +107,6 @@ export function useAppShell() {
     settings?.maxTimeMin,
     settings?.maxCostTier,
     settings?.noRepeatDays,
-    recipes,
   ]);
 
   const lang: Lang = settings?.lang ?? "es";

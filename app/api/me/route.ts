@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/authOptions";
-
-export const dynamic = "force-dynamic";
+import { requireMembership } from "@/lib/server/me";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const data = await requireMembership();
+  if (!data?.user) return NextResponse.json({ loggedIn: false });
+
   return NextResponse.json({
-    loggedIn: !!session?.user,
-    user: session?.user ?? null,
+    loggedIn: true,
+    user: data.user,
+    householdId: data.membership?.householdId ?? null,
+    role: data.membership?.role ?? null,
   });
 }

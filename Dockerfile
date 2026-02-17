@@ -1,58 +1,23 @@
-# ---------- deps ----------
-FROM node:20-bookworm-slim AS deps
+# ---------- build ----------
+FROM node:20-alpine AS build
 WORKDIR /app
-
 RUN corepack enable
-
-# deps necesarias para better-sqlite3 (compila nativo) y para python libs
-RUN apt-get update && apt-get install -y \
-  python3 python3-pip python3-venv \
-  build-essential \
-  && rm -rf /var/lib/apt/lists/*
-
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-
-# ---------- build ----------
-FROM node:20-bookworm-slim AS build
-WORKDIR /app
-RUN corepack enable
-
-RUN apt-get update && apt-get install -y \
-  python3 python3-pip python3-venv \
-  build-essential \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir -U pip
-RUN pip install --no-cache-dir pymupdf
-
-
-# prisma
-RUN pnpm prisma generate
-
-# build next
-RUN pnpm build
+RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder" pnpm prisma generate && pnpm build
 
 # ---------- runtime ----------
-FROM node:20-bookworm-slim AS runtime
+FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN corepack enable
-
-RUN apt-get update && apt-get install -y \
-  python3 python3-pip python3-venv \
-  && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir -U pip
-RUN pip install --no-cache-dir pymupdf
-
-COPY --from=build /app ./
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/package.json ./
+COPY --from=build /app/pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
 EXPOSE 3000
-CMD ["pnpm", "start"]
+CMD ["sh", "-c", "pnpm prisma migrate deploy && node server.js"]

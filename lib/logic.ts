@@ -86,8 +86,8 @@ export const ALWAYS_IGNORE = new Set([
   "agua", "aceite", "sal", "pimienta", "mantequilla", "vinagre",
 ]);
 
-export async function buildShoppingListForMany(recipes: Recipe[], settings: any) {
-  const pantrySet = await getPantrySet();
+export async function buildShoppingListForMany(recipes: Recipe[], settings: any, pantryOverride?: Set<string>) {
+  const pantrySet = pantryOverride ?? (await getPantrySet());
   const map = new Map<string, ShoppingItem>();
 
   for (const r of recipes) {

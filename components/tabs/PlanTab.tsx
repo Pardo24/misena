@@ -93,6 +93,13 @@ export function PlanTab({
                 }
               }}
             >
+              {r.imageUrl && (
+                <img
+                  src={r.imageUrl}
+                  alt={r.title?.[lang] || r.title?.es}
+                  className="w-full h-32 object-cover rounded-xl mb-2"
+                />
+              )}
               <div className="flex items-start justify-between gap-2">
                 <div className="font-bold text-warm-800">{r.title?.[lang] || r.title?.es}</div>
                 <div className="flex gap-1.5">
