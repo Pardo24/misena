@@ -16,6 +16,7 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/prisma.config.ts ./
 COPY --from=build /app/package.json ./
 COPY --from=build /app/pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile
