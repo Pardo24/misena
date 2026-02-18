@@ -38,7 +38,7 @@ type Props = {
   lang: Lang;
   t: Record<string, string>;
   toggleQueue: (recipeId: string) => void;
-  setTodayWithTransition: (r: Recipe | null) => void;
+  setDetailRecipe: (r: Recipe | null) => void;
   setTab: (t: Tab) => void;
 };
 
@@ -115,7 +115,7 @@ function RecipeCard({ r, lang, inQueue, toggleQueue, onClick }: {
 
 export function RecipesTab({
   filteredRecipes, recipeQuery, setRecipeQuery, queueIdSet, queue,
-  lang, t, toggleQueue, setTodayWithTransition, setTab,
+  lang, t, toggleQueue, setDetailRecipe, setTab,
 }: Props) {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -211,7 +211,7 @@ export function RecipesTab({
             lang={lang}
             inQueue={queueIdSet.has(r.id)}
             toggleQueue={toggleQueue}
-            onClick={() => { setTodayWithTransition(r); setTab("today"); }}
+            onClick={() => setDetailRecipe(r)}
           />
         ))}
       </div>
@@ -245,7 +245,7 @@ export function RecipesTab({
         </div>
       )}
 
-      <p className="mt-3 text-warm-400 text-sm">Tip: toca una receta para ponerla como &quot;Hoy&quot;.</p>
+      <p className="mt-3 text-warm-400 text-sm">Tip: toca una receta para ver los detalles.</p>
     </section>
   );
 }

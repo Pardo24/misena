@@ -79,3 +79,12 @@ button, a, input, select {
 button:active:not(:disabled) {
   transform: scale(0.97);
 }
+
+/* Hide scrollbar for horizontal tag scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/lib/db";
 import type { Lang, Mode, Recipe, ShoppingItem } from "@/lib/types";
 import {
@@ -15,6 +15,7 @@ import {
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import type { Tab, PantryRow } from "@/components/appShellStyles";
+import type { ToastMsg } from "@/components/Toast";
 
 export function useAppShell() {
   const [tab, setTab] = useState<Tab>("today");
@@ -38,9 +39,21 @@ export function useAppShell() {
   const [pantry, setPantry] = useState<PantryRow[] | null>(null);
   const [cookedSummary, setCookedSummary] = useState<{ name: string; qty: string }[] | null>(null);
   const [pantryNewName, setPantryNewName] = useState("");
+  const [detailRecipe, setDetailRecipe] = useState<Recipe | null>(null);
+  const [toastMsg, setToastMsg] = useState<ToastMsg>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data: session, status } = useSession();
 
   const searchParams = useSearchParams();
+
+  const showToast = useCallback((text: string, actionTab?: Tab) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToastMsg({
+      text,
+      action: actionTab ? { label: "Ver plan", tab: actionTab } : undefined,
+    });
+    toastTimer.current = setTimeout(() => setToastMsg(null), 3000);
+  }, []);
 
   useEffect(() => {
     const qtab = searchParams.get("tab") as any;
@@ -122,7 +135,7 @@ export function useAppShell() {
         settings: "Ajustes",
         reroll: "Otra receta",
         cookThis: "Marcar como cocinada",
-        makeList: "Generar lista de compra",
+        makeList: "Añadir a la cesta",
         empty: "No hay recetas que cumplan filtros.",
         mode: "Modo",
         lang: "Idioma",
@@ -142,7 +155,7 @@ export function useAppShell() {
         settings: "Ajustos",
         reroll: "Una altra recepta",
         cookThis: "Marcar com a cuinada",
-        makeList: "Generar llista de compra",
+        makeList: "Afegir a la cistella",
         empty: "No hi ha receptes que compleixin filtres.",
         mode: "Mode",
         lang: "Idioma",
@@ -254,6 +267,8 @@ export function useAppShell() {
 
   async function toggleQueue(recipeId: string) {
     const logged = await isLoggedIn();
+    const wasInQueue = queueIdSet.has(recipeId);
+
     if (!logged) {
       const existing = await db.queue.get(recipeId);
       if (existing) {
@@ -263,6 +278,10 @@ export function useAppShell() {
         await db.queue.put({ recipeId, position: maxPos + 1, createdAt: new Date() });
       }
       await loadQueue();
+      if (!wasInQueue) {
+        const r = recipes.find((r) => r.id === recipeId);
+        if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "plan");
+      }
       return;
     }
     const inQueue = queue.some((q: any) => q.recipeId === recipeId);
@@ -276,6 +295,10 @@ export function useAppShell() {
     );
     if (!res.ok) return;
     await loadQueue();
+    if (!wasInQueue) {
+      const r = recipes.find((r) => r.id === recipeId);
+      if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "plan");
+    }
   }
 
   async function generateShop() {
@@ -522,6 +545,10 @@ export function useAppShell() {
 
     // Settings
     toggleLang, setMode, updateNumber, updateCost, toggleDouble,
+
+    // Modal + Toast
+    detailRecipe, setDetailRecipe,
+    toastMsg, setToastMsg, showToast,
 
     // i18n
     lang, t,

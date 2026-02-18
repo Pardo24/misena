@@ -12,13 +12,13 @@ type Props = {
   generateWeeklyShop: () => Promise<void>;
   moveQueue: (recipeId: string, dir: "up" | "down") => Promise<void>;
   loadQueue: () => Promise<void>;
-  setTodayWithTransition: (r: Recipe | null) => void;
+  setDetailRecipe: (r: Recipe | null) => void;
   setTab: (t: Tab) => void;
 };
 
 export function PlanTab({
   queue, recipeQuery, setRecipeQuery, lang,
-  generateWeeklyShop, moveQueue, loadQueue, setTodayWithTransition, setTab,
+  generateWeeklyShop, moveQueue, loadQueue, setDetailRecipe, setTab,
 }: Props) {
   return (
     <section className="w-full max-w-[900px] bg-white border border-warm-200 rounded-2xl p-4 shadow-card">
@@ -84,12 +84,11 @@ export function PlanTab({
               role="button"
               tabIndex={0}
               className="text-left p-3 rounded-2xl border border-warm-200 bg-white shadow-card hover:shadow-card-hover transition-shadow cursor-pointer"
-              onClick={() => { setTodayWithTransition(r); setTab("today"); }}
+              onClick={() => setDetailRecipe(r)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  setTodayWithTransition(r);
-                  setTab("today");
+                  setDetailRecipe(r);
                 }
               }}
             >

@@ -9,6 +9,8 @@ import { PlanTab } from "@/components/tabs/PlanTab";
 import { ShopTab } from "@/components/tabs/ShopTab";
 import { PantryTab } from "@/components/tabs/PantryTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
+import { RecipeDetailModal } from "@/components/RecipeDetailModal";
+import { Toast } from "@/components/Toast";
 
 export function AppShell() {
   const s = useAppShell();
@@ -25,7 +27,7 @@ export function AppShell() {
     <div className="min-h-screen bg-warm-50 text-warm-900">
       <Header status={s.status} session={s.session} tab={s.tab} />
 
-      <main className="px-3 py-4 pb-28 grid place-items-start-center">
+      <main className="px-3 py-4 pb-28 grid place-items-start-center w-full overflow-hidden">
         {s.tab === "today" && (
           <TodayTab
             today={s.today} todayLoading={s.todayLoading} todayFadeIn={s.todayFadeIn}
@@ -39,7 +41,7 @@ export function AppShell() {
             filteredRecipes={s.filteredRecipes} recipeQuery={s.recipeQuery}
             setRecipeQuery={s.setRecipeQuery} queueIdSet={s.queueIdSet}
             queue={s.queue} lang={s.lang} t={s.t} toggleQueue={s.toggleQueue}
-            setTodayWithTransition={s.setTodayWithTransition} setTab={s.setTab}
+            setDetailRecipe={s.setDetailRecipe} setTab={s.setTab}
           />
         )}
         {s.tab === "plan" && (
@@ -47,7 +49,7 @@ export function AppShell() {
             queue={s.queue} recipeQuery={s.recipeQuery} setRecipeQuery={s.setRecipeQuery}
             lang={s.lang} generateWeeklyShop={s.generateWeeklyShop}
             moveQueue={s.moveQueue} loadQueue={s.loadQueue}
-            setTodayWithTransition={s.setTodayWithTransition} setTab={s.setTab}
+            setDetailRecipe={s.setDetailRecipe} setTab={s.setTab}
           />
         )}
         {s.tab === "shop" && (
@@ -78,6 +80,30 @@ export function AppShell() {
       </main>
 
       <BottomNav tab={s.tab} setTab={s.setTab} t={s.t} />
+
+      {/* Recipe Detail Modal */}
+      {s.detailRecipe && (
+        <RecipeDetailModal
+          recipe={s.detailRecipe}
+          settings={s.settings}
+          lang={s.lang}
+          inQueue={s.queueIdSet.has(s.detailRecipe.id)}
+          onToggleQueue={() => s.toggleQueue(s.detailRecipe!.id)}
+          onCook={async () => {
+            s.setTodayWithTransition(s.detailRecipe);
+            s.setDetailRecipe(null);
+            s.setTab("today");
+          }}
+          onClose={() => s.setDetailRecipe(null)}
+        />
+      )}
+
+      {/* Toast */}
+      <Toast
+        msg={s.toastMsg}
+        onDismiss={() => s.setToastMsg(null)}
+        onAction={(tab) => s.setTab(tab)}
+      />
     </div>
   );
 }
