@@ -313,8 +313,7 @@ function normalizeForSearch(s: string): string {
   return stripAccents(s)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\s+/g, " ")    .trim();
 }
 
 function maybeFixMojibake(s: string): string {

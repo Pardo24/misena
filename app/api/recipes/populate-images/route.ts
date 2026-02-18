@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   buildCandidateQueries,
+  getRecipeDetail,
   scrapeRecipePage,
   searchRecipes,
   scoreMatch,
@@ -38,10 +39,13 @@ async function findHelloFreshUrl(titleRaw: string): Promise<{ url: string | null
   return { url: null, query: queries[0] ?? "" };
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   if (!process.env.HFRESH_API_TOKEN) {
-    return NextResponse.json({ error: "HFRESH_API_TOKEN missing" }, { status: 500 });
+    return ndjson({ error: "HFRESH_API_TOKEN missing" }, true);
   }
+
+  const limitParam = req.nextUrl.searchParams.get("limit");
+  const limit = limitParam ? parseInt(limitParam, 10) : undefined;
 
   const recipes = await prisma.recipe.findMany({
     where: {
@@ -50,48 +54,87 @@ export async function POST() {
         { imageUrl: { contains: "unsplash" } },
       ],
     },
-    select: { id: true, title: true, steps: true },
+    select: { id: true, title: true, source: true, sourceId: true },
+    ...(limit ? { take: limit } : {}),
   });
 
   if (recipes.length === 0) {
-    return NextResponse.json({ ok: true, message: "All recipes already have images", updated: 0 });
+    return ndjson({ ok: true, message: "All recipes already have images", updated: 0 });
   }
 
-  let updated = 0;
-  const failed: Array<{ id: string; reason: string; query?: string }> = [];
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      };
 
-  for (const r of recipes) {
-    const title = r.title as Record<string, string>;
-    const titleRaw = title.es || title.ca || Object.values(title)[0] || "";
+      let updated = 0;
 
-    const { url: hfUrl, query } = await findHelloFreshUrl(titleRaw);
+      for (const r of recipes) {
+        const title = r.title as Record<string, string>;
+        const titleRaw = title.es || title.ca || Object.values(title)[0] || "";
 
-    if (!hfUrl) {
-      failed.push({ id: r.id, reason: "NO_HF_MATCH", query });
-      continue;
-    }
+        let scrapeUrl: string | null = null;
 
-    const page = await scrapeRecipePage(hfUrl);
+        // For hfresh-sourced recipes, get URL directly via API detail
+        if (r.source === "hfresh" && r.sourceId) {
+          try {
+            const detail = await getRecipeDetail(Number(r.sourceId));
+            scrapeUrl = detail.url || null;
+          } catch {
+            send({ id: r.id, title: titleRaw, status: "DETAIL_FETCH_FAILED" });
+          }
+        }
 
-    if (!page.ogImage) {
-      failed.push({ id: r.id, reason: "NO_OG_IMAGE", query });
-      continue;
-    }
+        // Fallback: fuzzy search for non-hfresh or if detail fetch failed
+        if (!scrapeUrl) {
+          const { url, query } = await findHelloFreshUrl(titleRaw);
+          if (!url) {
+            send({ id: r.id, title: titleRaw, status: "NO_HF_MATCH", query });
+            continue;
+          }
+          scrapeUrl = url;
+        }
 
-    // Save step images as a parallel array (not injected into steps)
-    const stepImages = page.stepImages.length > 0 ? page.stepImages : undefined;
+        const page = await scrapeRecipePage(scrapeUrl);
 
-    await prisma.recipe.update({
-      where: { id: r.id },
-      data: {
-        imageUrl: page.ogImage,
-        ...(stepImages ? { stepImages } : {}),
-      },
-    });
+        if (!page.ogImage) {
+          send({ id: r.id, title: titleRaw, status: "NO_OG_IMAGE" });
+          continue;
+        }
 
-    updated++;
-    await sleep(800);
-  }
+        const stepImages = page.stepImages.length > 0 ? page.stepImages : undefined;
 
-  return NextResponse.json({ ok: true, total: recipes.length, updated, failed });
+        await prisma.recipe.update({
+          where: { id: r.id },
+          data: {
+            imageUrl: page.ogImage,
+            ...(stepImages ? { stepImages } : {}),
+          },
+        });
+
+        updated++;
+        send({ id: r.id, title: titleRaw, status: "OK", imageUrl: page.ogImage });
+        await sleep(800);
+      }
+
+      send({ done: true, total: recipes.length, updated });
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-cache",
+    },
+  });
+}
+
+function ndjson(obj: Record<string, unknown>, isError = false) {
+  return new Response(JSON.stringify(obj) + "\n", {
+    status: isError ? 500 : 200,
+    headers: { "Content-Type": "application/x-ndjson" },
+  });
 }
