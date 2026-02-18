@@ -151,7 +151,8 @@ export default function AccountPage() {
     });
 
     if (!r.ok) {
-      setErr((await r.text()) || "No se pudo invitar.");
+      const body = await r.json().catch(() => null);
+      setErr(body?.message || "No se pudo invitar.");
       return;
     }
 

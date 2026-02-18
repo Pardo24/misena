@@ -91,6 +91,24 @@ export async function POST(req: Request) {
   const email = String(body?.email ?? "").trim().toLowerCase();
   // email is now optional — empty means "shareable link for anyone"
 
+  // Prevent duplicate PENDING invites for the same email in this household
+  if (email) {
+    const existing = await prisma.householdInvite.findFirst({
+      where: {
+        householdId: data.membership.householdId,
+        email,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+      },
+    });
+    if (existing) {
+      return NextResponse.json(
+        { error: "DUPLICATE", message: "Ya existe una invitación pendiente para este email." },
+        { status: 409 },
+      );
+    }
+  }
+
   const token = crypto.randomBytes(24).toString("hex");
   const tokenHash = sha256(token);
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 48); // 48h expiry
