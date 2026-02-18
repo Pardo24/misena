@@ -169,7 +169,7 @@ export function ShopTab({
                 }).catch(() => {});
                 setShop(null);
                 await loadPantry();
-                setTab("pantry");
+                setTab("profile");
               }}
               disabled={finishingShop || !shop?.length}
             >

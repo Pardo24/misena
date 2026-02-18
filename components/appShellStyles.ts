@@ -1,4 +1,4 @@
-export type Tab = "today" | "recipes" | "shop" | "plan" | "pantry" | "settings";
+export type Tab = "home" | "recipes" | "shop" | "profile";
 
 export type PantryRow = {
   id: string;

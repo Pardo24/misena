@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import type { Lang, Recipe } from "@/lib/types";
 import type { Tab } from "@/components/appShellStyles";
-import { Clock, Coins, X, Plus, Check, ChevronLeft, ChevronRight, Flame, Filter } from "lucide-react";
+import { Clock, Coins, X, Plus, Check, ChevronLeft, ChevronRight, Flame } from "lucide-react";
 
 const PAGE_SIZE = 24;
 
@@ -117,8 +117,17 @@ export function RecipesTab({
   filteredRecipes, recipeQuery, setRecipeQuery, queueIdSet, queue,
   lang, t, toggleQueue, setDetailRecipe, setTab,
 }: Props) {
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
+
+  function toggleTag(tag: string) {
+    setActiveTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
 
   // Collect all unique tags from filtered recipes
   const allTags = useMemo(() => {
@@ -131,14 +140,20 @@ export function RecipesTab({
     return TAG_ORDER.filter((t) => tagCount.has(t)).map((t) => ({ tag: t, count: tagCount.get(t)! }));
   }, [filteredRecipes]);
 
-  // Filter recipes by active tag
+  // Filter recipes by active tags (must match ALL selected tags)
   const displayRecipes = useMemo(() => {
-    if (!activeTag) return filteredRecipes;
-    return filteredRecipes.filter((r) => r.tags?.includes(activeTag));
-  }, [filteredRecipes, activeTag]);
+    if (activeTags.size === 0) return filteredRecipes;
+    return filteredRecipes.filter((r) => {
+      const rTags = r.tags ?? [];
+      for (const t of activeTags) {
+        if (!rTags.includes(t)) return false;
+      }
+      return true;
+    });
+  }, [filteredRecipes, activeTags]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [recipeQuery, activeTag]);
+  useEffect(() => { setPage(1); }, [recipeQuery, activeTags]);
 
   const totalPages = Math.max(1, Math.ceil(displayRecipes.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -167,39 +182,41 @@ export function RecipesTab({
         <button
           type="button"
           className="px-3 py-2 rounded-xl border border-warm-200 bg-white text-sm font-bold text-warm-700 whitespace-nowrap hover:border-primary-300 cursor-pointer"
-          onClick={() => setTab("plan")}
+          onClick={() => setTab("home")}
         >
           Ver lista ({queue.length})
         </button>
       </div>
 
-      {/* Tag filter dropdown */}
+      {/* Tag filter chips */}
       {allTags.length > 0 && (
-        <div className="flex gap-2 items-center mb-3">
-          <div className="relative flex-1">
-            <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
-            <select
-              value={activeTag ?? ""}
-              onChange={(e) => setActiveTag(e.target.value || null)}
-              className="w-full pl-8 pr-3 py-2 rounded-full border border-warm-200 bg-warm-50 text-sm font-semibold text-warm-700 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 appearance-none cursor-pointer"
-            >
-              <option value="">Todas las categorías ({filteredRecipes.length})</option>
-              {allTags.map(({ tag, count }) => (
-                <option key={tag} value={tag}>
-                  {TAG_LABELS[tag] || tag} ({count})
-                </option>
-              ))}
-            </select>
-          </div>
-          {activeTag && (
+        <div className="flex gap-1.5 flex-wrap mb-3 items-center">
+          {activeTags.size > 0 && (
             <button
               type="button"
-              className="w-9 h-9 rounded-xl border border-warm-200 bg-white flex items-center justify-center cursor-pointer text-warm-500 hover:text-warm-700"
-              onClick={() => setActiveTag(null)}
+              className="px-2.5 py-1.5 rounded-full border border-warm-300 bg-white text-warm-500 text-xs font-bold cursor-pointer hover:text-warm-700 hover:border-warm-400"
+              onClick={() => setActiveTags(new Set())}
             >
-              <X size={16} />
+              Limpiar
             </button>
           )}
+          {allTags.map(({ tag, count }) => {
+            const active = activeTags.has(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={`px-2.5 py-1.5 rounded-full text-xs font-bold cursor-pointer transition-colors border ${
+                  active
+                    ? "bg-primary-600 text-white border-primary-600"
+                    : "bg-warm-50 text-warm-600 border-warm-200 hover:border-primary-300 hover:text-primary-700"
+                }`}
+                onClick={() => toggleTag(tag)}
+              >
+                {TAG_LABELS[tag] || tag} ({count})
+              </button>
+            );
+          })}
         </div>
       )}
 

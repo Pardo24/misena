@@ -1,22 +1,18 @@
 "use client";
 
 import {
-  UtensilsCrossed,
+  Home,
   BookOpen,
-  CalendarDays,
   ShoppingCart,
-  Package,
-  Settings,
+  User,
 } from "lucide-react";
 import type { Tab } from "@/components/appShellStyles";
 
-const NAV_ITEMS: Array<{ key: Tab; icon: typeof UtensilsCrossed; labelKey: string }> = [
-  { key: "today", icon: UtensilsCrossed, labelKey: "today" },
+const NAV_ITEMS: Array<{ key: Tab; icon: typeof Home; labelKey: string }> = [
+  { key: "home", icon: Home, labelKey: "home" },
   { key: "recipes", icon: BookOpen, labelKey: "recipes" },
-  { key: "plan", icon: CalendarDays, labelKey: "plan" },
   { key: "shop", icon: ShoppingCart, labelKey: "shop" },
-  { key: "pantry", icon: Package, labelKey: "pantry" },
-  { key: "settings", icon: Settings, labelKey: "settings" },
+  { key: "profile", icon: User, labelKey: "profile" },
 ];
 
 type Props = {

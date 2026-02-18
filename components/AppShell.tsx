@@ -3,12 +3,10 @@
 import { useAppShell } from "@/components/hooks/useAppShell";
 import { BottomNav } from "@/components/BottomNav";
 import { Header } from "@/components/Header";
-import { TodayTab } from "@/components/tabs/TodayTab";
+import { HomeTab } from "@/components/tabs/HomeTab";
 import { RecipesTab } from "@/components/tabs/RecipesTab";
-import { PlanTab } from "@/components/tabs/PlanTab";
 import { ShopTab } from "@/components/tabs/ShopTab";
-import { PantryTab } from "@/components/tabs/PantryTab";
-import { SettingsTab } from "@/components/tabs/SettingsTab";
+import { ProfileTab } from "@/components/tabs/ProfileTab";
 import { RecipeDetailModal } from "@/components/RecipeDetailModal";
 import { Toast } from "@/components/Toast";
 
@@ -27,13 +25,19 @@ export function AppShell() {
     <div className="min-h-screen bg-warm-50 text-warm-900">
       <Header status={s.status} session={s.session} tab={s.tab} />
 
-      <main className="px-3 py-4 pb-28 grid place-items-start-center w-full overflow-hidden">
-        {s.tab === "today" && (
-          <TodayTab
-            today={s.today} todayLoading={s.todayLoading} todayFadeIn={s.todayFadeIn}
-            settings={s.settings} lang={s.lang} t={s.t} shop={s.shop}
-            cookedSummary={s.cookedSummary} reroll={s.reroll}
-            generateShop={s.generateShop} cooked={s.cooked}
+      <main className="px-3 py-4 pb-28 w-full overflow-hidden max-w-[900px] mx-auto">
+        {s.tab === "home" && (
+          <HomeTab
+            session={s.session}
+            today={s.today} todayLoading={s.todayLoading}
+            reroll={s.reroll}
+            queue={s.queue} queueIdSet={s.queueIdSet}
+            toggleQueue={s.toggleQueue}
+            generateWeeklyShop={s.generateWeeklyShop}
+            moveQueue={s.moveQueue} loadQueue={s.loadQueue}
+            shop={s.shop} pantry={s.pantry}
+            setTab={s.setTab} setDetailRecipe={s.setDetailRecipe}
+            lang={s.lang} t={s.t}
           />
         )}
         {s.tab === "recipes" && (
@@ -41,14 +45,6 @@ export function AppShell() {
             filteredRecipes={s.filteredRecipes} recipeQuery={s.recipeQuery}
             setRecipeQuery={s.setRecipeQuery} queueIdSet={s.queueIdSet}
             queue={s.queue} lang={s.lang} t={s.t} toggleQueue={s.toggleQueue}
-            setDetailRecipe={s.setDetailRecipe} setTab={s.setTab}
-          />
-        )}
-        {s.tab === "plan" && (
-          <PlanTab
-            queue={s.queue} recipeQuery={s.recipeQuery} setRecipeQuery={s.setRecipeQuery}
-            lang={s.lang} generateWeeklyShop={s.generateWeeklyShop}
-            moveQueue={s.moveQueue} loadQueue={s.loadQueue}
             setDetailRecipe={s.setDetailRecipe} setTab={s.setTab}
           />
         )}
@@ -63,18 +59,16 @@ export function AppShell() {
             loadPantry={s.loadPantry}
           />
         )}
-        {s.tab === "pantry" && (
-          <PantryTab
+        {s.tab === "profile" && (
+          <ProfileTab
+            session={s.session} status={s.status}
             pantry={s.pantry} setPantry={s.setPantry}
             pantryNewName={s.pantryNewName} setPantryNewName={s.setPantryNewName}
-            savePantryItem={s.savePantryItem} deletePantryItem={s.deletePantryItem} t={s.t}
-          />
-        )}
-        {s.tab === "settings" && (
-          <SettingsTab
-            settings={s.settings} t={s.t} toggleLang={s.toggleLang}
-            setMode={s.setMode} updateNumber={s.updateNumber}
-            updateCost={s.updateCost} toggleDouble={s.toggleDouble}
+            savePantryItem={s.savePantryItem} deletePantryItem={s.deletePantryItem}
+            settings={s.settings}
+            toggleLang={s.toggleLang} setMode={s.setMode}
+            updateNumber={s.updateNumber} updateCost={s.updateCost}
+            toggleDouble={s.toggleDouble} t={s.t}
           />
         )}
       </main>
@@ -92,7 +86,7 @@ export function AppShell() {
           onCook={async () => {
             s.setTodayWithTransition(s.detailRecipe);
             s.setDetailRecipe(null);
-            s.setTab("today");
+            s.setTab("home");
           }}
           onClose={() => s.setDetailRecipe(null)}
         />

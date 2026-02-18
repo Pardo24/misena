@@ -18,7 +18,7 @@ import type { Tab, PantryRow } from "@/components/appShellStyles";
 import type { ToastMsg } from "@/components/Toast";
 
 export function useAppShell() {
-  const [tab, setTab] = useState<Tab>("today");
+  const [tab, setTab] = useState<Tab>("home");
   const [ready, setReady] = useState(false);
 
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof getSettings>> | null>(null);
@@ -50,14 +50,14 @@ export function useAppShell() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToastMsg({
       text,
-      action: actionTab ? { label: "Ver plan", tab: actionTab } : undefined,
+      action: actionTab ? { label: "Ver plan", tab: actionTab as Tab } : undefined,
     });
     toastTimer.current = setTimeout(() => setToastMsg(null), 3000);
   }, []);
 
   useEffect(() => {
     const qtab = searchParams.get("tab") as any;
-    const allowed = new Set(["today", "recipes", "shop", "plan", "pantry", "settings"]);
+    const allowed = new Set(["home", "recipes", "shop", "profile"]);
     if (qtab && allowed.has(qtab)) {
       setTab(qtab);
     }
@@ -127,10 +127,10 @@ export function useAppShell() {
   const t = useMemo(() => {
     const dict = {
       es: {
-        today: "Hoy",
+        home: "Inicio",
         recipes: "Recetas",
-        plan: "Plan",
         shop: "Compra",
+        profile: "Perfil",
         pantry: "Despensa",
         settings: "Ajustes",
         reroll: "Otra receta",
@@ -145,12 +145,17 @@ export function useAppShell() {
         noRepeat: "No repetir (días)",
         addPantry: "Añadir a despensa",
         pantryHelp: "Añade básicos (ej: aceite, sal, ajo) para que no salgan en la compra.",
+        greeting: "Hola",
+        suggestion: "Sugerencia del día",
+        planEmpty: "Tu plan está vacío",
+        exploreCta: "Explorar recetas",
+        weeklyShopCta: "Lista compra semanal",
       },
       ca: {
-        today: "Avui",
+        home: "Inici",
         recipes: "Receptes",
-        plan: "Pla",
         shop: "Compra",
+        profile: "Perfil",
         pantry: "Rebost",
         settings: "Ajustos",
         reroll: "Una altra recepta",
@@ -165,6 +170,11 @@ export function useAppShell() {
         noRepeat: "No repetir (dies)",
         addPantry: "Afegir al rebost",
         pantryHelp: "Afegeix bàsics (ex: oli, sal, all) perquè no surtin a la compra.",
+        greeting: "Hola",
+        suggestion: "Suggeriment del dia",
+        planEmpty: "El teu pla està buit",
+        exploreCta: "Explorar receptes",
+        weeklyShopCta: "Llista compra setmanal",
       }
     } as const;
     return dict[lang];
@@ -207,7 +217,7 @@ export function useAppShell() {
   }
 
   useEffect(() => {
-    if (tab === "recipes" || tab === "plan") {
+    if (tab === "recipes" || tab === "home") {
       loadQueue().catch(console.error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -280,7 +290,7 @@ export function useAppShell() {
       await loadQueue();
       if (!wasInQueue) {
         const r = recipes.find((r) => r.id === recipeId);
-        if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "plan");
+        if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "home");
       }
       return;
     }
@@ -297,7 +307,7 @@ export function useAppShell() {
     await loadQueue();
     if (!wasInQueue) {
       const r = recipes.find((r) => r.id === recipeId);
-      if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "plan");
+      if (r) showToast(`Se ha añadido ${r.title[lang]} al plan`, "home");
     }
   }
 
@@ -428,7 +438,7 @@ export function useAppShell() {
     setShowShopDoneDialog(false);
     setFinishingShop(false);
     await loadPantry();
-    setTab("pantry");
+    setTab("profile");
   }
 
   async function onShareShop() {
